@@ -504,7 +504,7 @@ class ASN1Decoder:
                 last_exc = e
         return None, last_exc
 
-    def process(self, input_file, roots, encoding='der'):
+    def process(self, input_file, roots='', encoding='der'):
         candidate_roots = [r.strip() for r in roots.split(',') if r.strip()]
         if not candidate_roots:
             candidate_roots = ['IRIsContent', 'IRIRecord', 'IRI-Begin', 'IRI-Continue', 'IRI-End', 'IRI', 'PS-PDU']
@@ -516,7 +516,7 @@ class ASN1Decoder:
 
         return root_used, result
 
-    def process_dir(self, input_dir, output_dir, roots, encoding='der', save_raw_on_fail=True, asn_try_nested=True, nested_types=None):
+    def process_dir(self, input_dir, output_dir, roots='', encoding='der', save_raw_on_fail=True, asn_try_nested=True, nested_types=None):
         os.makedirs(output_dir, exist_ok=True)
 
         candidate_roots = [r.strip() for r in roots.split(',') if r.strip()]
