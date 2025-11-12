@@ -55,7 +55,7 @@ class ASN1Decoder:
         nature_and_plan = data[0]
         bcd_data = data[1:]
         
-        number = decode_bcd_phone_number(bcd_data)
+        number = self.decode_bcd_phone_number(bcd_data)
         if number:
             return {
                 "number": number,
@@ -71,7 +71,7 @@ class ASN1Decoder:
         First byte: nature of address + numbering plan.
         Remaining bytes: BCD encoded digits.
         """
-        return decode_e164_format(data)
+        return self.decode_e164_format(data)
 
     def decode_imsi(self, data: bytes) -> Optional[str]:
         """
@@ -87,7 +87,7 @@ class ASN1Decoder:
         identity_type = first_byte & 0x07
         
         # Decode remaining as BCD
-        imsi_digits = decode_bcd_phone_number(data)
+        imsi_digits = self.decode_bcd_phone_number(data)
         
         if imsi_digits and len(imsi_digits) >= 6:  # IMSI should be 14-15 digits
             # Remove leading digit if it's parity/filler (often '1')
@@ -105,7 +105,7 @@ class ASN1Decoder:
         if len(data) != 8:
             return None
         
-        imei = decode_bcd_phone_number(data)
+        imei = self.decode_bcd_phone_number(data)
         if imei and len(imei) == 15:  # IMEI is 15 digits
             return f"IMEI:{imei}"
         
@@ -144,9 +144,9 @@ class ASN1Decoder:
             "raw_hex": data.hex()
         }
         if lac is not None:
-            result["LAC"] = lac
+            result["LAC"] = str(lac)
         if ci is not None:
-            result["CellID"] = ci
+            result["CellID"] = str(ci)
         
         return result
 
@@ -186,7 +186,7 @@ class ASN1Decoder:
             if idx + oa_bytes > len(data):
                 return None
             oa_data = data[idx:idx + oa_bytes]
-            originating_address = decode_bcd_phone_number(oa_data)
+            originating_address = self.decode_bcd_phone_number(oa_data)
             idx += oa_bytes
             
             # PID
@@ -229,7 +229,7 @@ class ASN1Decoder:
             message_text = None
             if encoding == "gsm-7bit":
                 # GSM 7-bit decoding (simplified - doesn't handle all edge cases)
-                message_text = decode_gsm7bit(user_data, udl)
+                message_text = self.decode_gsm7bit(user_data, udl)
             elif encoding == "ucs-2":
                 try:
                     message_text = user_data.decode('utf-16-be')
@@ -315,37 +315,37 @@ class ASN1Decoder:
         
         # SMS content
         if "sms" in context_lower and "content" in context_lower:
-            result = decode_sms_pdu(data)
+            result = self.decode_sms_pdu(data)
             if result:
                 return {"decoded_sms": result}
         
         # IMSI
         if "imsi" in context_lower or (3 <= len(data) <= 8):
-            result = decode_imsi(data)
+            result = self.decode_imsi(data)
             if result:
                 return result
         
         # IMEI
         if "imei" in context_lower or len(data) == 8:
-            result = decode_imei(data)
+            result = self.decode_imei(data)
             if result:
                 return result
         
         # Global Cell ID
         if "cell" in context_lower or "gcid" in context_lower or (5 <= len(data) <= 7):
-            result = decode_global_cell_id(data)
+            result = self.decode_global_cell_id(data)
             if result:
                 return result
         
         # Phone numbers (E.164 or MAP format)
         if any(kw in context_lower for kw in ["number", "msisdn", "calling", "called", "address"]):
             # Try MAP format first
-            result = decode_map_format_number(data)
+            result = self.decode_map_format_number(data)
             if result:
                 return result
             
             # Try E164 format
-            result = decode_e164_format(data)
+            result = self.decode_e164_format(data)
             if result:
                 return result
         
@@ -353,25 +353,25 @@ class ASN1Decoder:
         
         # Check if it looks like a phone number (MAP/E164 format)
         if len(data) >= 2:
-            result = decode_map_format_number(data)
+            result = self.decode_map_format_number(data)
             if result and result.get("number") and len(result["number"]) >= 4:
                 return result
         
         # Check if it could be IMEI (8 bytes)
         if len(data) == 8:
-            result = decode_imei(data)
+            result = self.decode_imei(data)
             if result:
                 return result
         
         # Check if it could be IMSI (3-8 bytes)
         if 3 <= len(data) <= 8:
-            result = decode_imsi(data)
+            result = self.decode_imsi(data)
             if result:
                 return result
         
         # Check if it could be Global Cell ID
         if 5 <= len(data) <= 7:
-            result = decode_global_cell_id(data)
+            result = self.decode_global_cell_id(data)
             if result:
                 return result
         
