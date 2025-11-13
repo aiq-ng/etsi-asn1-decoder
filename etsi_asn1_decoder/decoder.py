@@ -550,25 +550,25 @@ class ASN1Decoder:
                 return result
 
         # Generic unsigned identifiers
-        id_keywords = [
-            "identifier",
-            "liid",
-            "counter",
-            "sequence",
-            "seq",
-            "reference",
-            "correlation",
-            "recordid",
-            "requestid",
-            "messageid",
-            "userid",
-            "index",
-            "offset"
-        ]
-        if any(kw in context_lower for kw in id_keywords):
-            result = self.decode_unsigned_identifier(data)
-            if result:
-                return result
+        # id_keywords = [
+        #     "identifier",
+        #     "liid",
+        #     "counter",
+        #     "sequence",
+        #     "seq",
+        #     "reference",
+        #     "correlation",
+        #     "recordid",
+        #     "requestid",
+        #     "messageid",
+        #     "userid",
+        #     "index",
+        #     "offset"
+        # ]
+        # if any(kw in context_lower for kw in id_keywords):
+        #     result = self.decode_unsigned_identifier(data)
+        #     if result:
+        #         return result
 
         # Communication Identifier / CIN heuristic
         cin_keywords = [
