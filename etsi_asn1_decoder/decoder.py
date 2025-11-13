@@ -515,8 +515,7 @@ class ASN1Decoder:
             data = f.read()
 
         root_used, result = self.try_decode_file(self.spec, candidate_roots, data)
-
-        base_name = os.path.splitext(input_file)[0]
+        
         if root_used:
             json_safe = self.make_json_safe(result, spec=self.spec)
             return True, {
