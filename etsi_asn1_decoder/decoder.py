@@ -150,6 +150,71 @@ class ASN1Decoder:
         
         return result
 
+    def decode_communication_identifier_blob(self, data: bytes) -> Optional[dict]:
+        """
+        Attempt to decode a raw OCTET STRING that carries an ETSI/3GPP
+        CommunicationIdentifier-style blob where the last 4 bytes are a CIN
+        (Communication Identity Number) and the preceding bytes contain the
+        network identifier metadata.
+        """
+        if len(data) < 4:
+            return None
+
+        cin_bytes = data[-4:]
+        cin_value = int.from_bytes(cin_bytes, byteorder="big", signed=False)
+        cin_ascii_digits = ''.join(chr(b) for b in cin_bytes if 0x30 <= b <= 0x39)
+
+        decoded = {
+            "format": "etsi_communication_identifier",
+            "raw_hex": data.hex(),
+            "cin": {
+                "int": cin_value,
+                "decimal": str(cin_value),
+                "hex": cin_bytes.hex()
+            }
+        }
+
+        if len(cin_ascii_digits) == len(cin_bytes):
+            decoded["cin"]["ascii_digits"] = cin_ascii_digits
+
+        prefix = data[:-4]
+        if prefix:
+            decoded["network_identifier_blob_hex"] = prefix.hex()
+            decoded["network_identifier_blob_length"] = len(prefix)
+
+            if self.is_printable_ascii(prefix):
+                try:
+                    ascii_value = prefix.decode('ascii').strip('\x00')
+                    if ascii_value:
+                        decoded["network_identifier_ascii"] = ascii_value
+                except Exception:
+                    pass
+
+            # Heuristic split: first byte = network identifier, second = profile bits,
+            # remaining bytes = internal correlation reference.
+            if 1 <= len(prefix) <= 4:
+                decoded["network_identifier"] = prefix[0]
+
+                if len(prefix) >= 2:
+                    profile_bits = prefix[1]
+                    decoded["profile_specific_bits"] = {
+                        "value": profile_bits,
+                        "binary": f"{profile_bits:08b}"
+                    }
+
+                if len(prefix) >= 3:
+                    internal_bytes = prefix[2:]
+                    if internal_bytes:
+                        internal_value = int.from_bytes(internal_bytes, byteorder="big", signed=False)
+                        decoded["internal_correlation"] = {
+                            "int": internal_value,
+                            "decimal": str(internal_value),
+                            "hex": internal_bytes.hex(),
+                            "bytes": len(internal_bytes)
+                        }
+
+        return decoded
+
     def decode_sms_pdu(self, data: bytes) -> Optional[dict]:
         """
         Decode SMS-DELIVER PDU (simplified version).
@@ -334,6 +399,24 @@ class ASN1Decoder:
         # Global Cell ID
         if "cell" in context_lower or "gcid" in context_lower or (5 <= len(data) <= 7):
             result = self.decode_global_cell_id(data)
+            if result:
+                return result
+
+        # Communication Identifier / CIN heuristic
+        cin_keywords = [
+            "cin",
+            "communicationidentifier",
+            "communication-identity-number",
+            "communicationidentitynumber",
+            "networkidentifier",
+            "network-identifier",
+            "internalcorrelation",
+            "internal-correlation",
+            "profilespecific",
+            "profile-specific"
+        ]
+        if any(kw in context_lower for kw in cin_keywords):
+            result = self.decode_communication_identifier_blob(data)
             if result:
                 return result
         
