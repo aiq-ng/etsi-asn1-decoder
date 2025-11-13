@@ -550,43 +550,43 @@ class ASN1Decoder:
                 return result
 
         # Generic unsigned identifiers
-        # id_keywords = [
-        #     "identifier",
-        #     "liid",
-        #     "counter",
-        #     "sequence",
-        #     "seq",
-        #     "reference",
-        #     "correlation",
-        #     "recordid",
-        #     "requestid",
-        #     "messageid",
-        #     "userid",
-        #     "index",
-        #     "offset"
-        # ]
-        # if any(kw in context_lower for kw in id_keywords):
-        #     result = self.decode_unsigned_identifier(data)
-        #     if result:
-        #         return result
-
-        # Communication Identifier / CIN heuristic
-        cin_keywords = [
-            "cin",
-            "communicationidentifier",
-            "communication-identity-number",
-            "communicationidentitynumber",
-            "networkidentifier",
-            "network-identifier",
-            "internalcorrelation",
-            "internal-correlation",
-            "profilespecific",
-            "profile-specific"
+        id_keywords = [
+            "identifier",
+            "liid",
+            "counter",
+            "sequence",
+            "seq",
+            "reference",
+            "correlation",
+            "recordid",
+            "requestid",
+            "messageid",
+            "userid",
+            "index",
+            "offset"
         ]
-        if any(kw in context_lower for kw in cin_keywords):
-            result = self.decode_communication_identifier_blob(data)
+        if any(kw in context_lower for kw in id_keywords):
+            result = self.decode_unsigned_identifier(data)
             if result:
                 return result
+
+        # Communication Identifier / CIN heuristic
+        # cin_keywords = [
+        #     "cin",
+        #     "communicationidentifier",
+        #     "communication-identity-number",
+        #     "communicationidentitynumber",
+        #     "networkidentifier",
+        #     "network-identifier",
+        #     "internalcorrelation",
+        #     "internal-correlation",
+        #     "profilespecific",
+        #     "profile-specific"
+        # ]
+        # if any(kw in context_lower for kw in cin_keywords):
+        #     result = self.decode_communication_identifier_blob(data)
+        #     if result:
+        #         return result
         
         # Phone numbers (E.164 or MAP format)
         if any(kw in context_lower for kw in ["number", "msisdn", "calling", "called", "address"]):
