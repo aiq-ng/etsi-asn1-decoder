@@ -2,6 +2,9 @@
 import os
 import json
 import argparse
+import ipaddress
+import uuid
+from datetime import datetime, timezone
 import asn1tools
 from typing import Any, Optional, Tuple
 import orjson
@@ -149,6 +152,116 @@ class ASN1Decoder:
             result["CellID"] = str(ci)
         
         return result
+
+    def decode_plmn(self, data: bytes) -> Optional[dict]:
+        """
+        Decode a 3-octet PLMN identifier (MCC+MNC) in BCD format.
+        """
+        if len(data) != 3:
+            return None
+
+        mcc_digit1 = data[0] & 0x0F
+        mcc_digit2 = (data[0] >> 4) & 0x0F
+        mcc_digit3 = data[1] & 0x0F
+
+        mnc_digit3 = (data[1] >> 4) & 0x0F
+        mnc_digit1 = data[2] & 0x0F
+        mnc_digit2 = (data[2] >> 4) & 0x0F
+
+        digits = [mcc_digit1, mcc_digit2, mcc_digit3, mnc_digit1, mnc_digit2]
+        if any(d > 9 for d in digits if d != 0xF):
+            return None
+
+        mcc = f"{mcc_digit1}{mcc_digit2}{mcc_digit3}"
+        if mnc_digit3 == 0xF:
+            mnc = f"{mnc_digit1}{mnc_digit2}"
+        else:
+            if mnc_digit3 > 9:
+                return None
+            mnc = f"{mnc_digit1}{mnc_digit2}{mnc_digit3}"
+
+        return {
+            "type": "plmn",
+            "MCC": mcc,
+            "MNC": mnc,
+            "raw_hex": data.hex()
+        }
+
+    def decode_ip_address(self, data: bytes) -> Optional[dict]:
+        """
+        Decode IPv4/IPv6 binary addresses.
+        """
+        try:
+            if len(data) == 4:
+                ip = ipaddress.IPv4Address(data)
+                return {"type": "ipv4", "address": str(ip), "raw_hex": data.hex()}
+            if len(data) == 16:
+                ip = ipaddress.IPv6Address(data)
+                return {"type": "ipv6", "address": ip.compressed, "full": ip.exploded, "raw_hex": data.hex()}
+        except Exception:
+            return None
+        return None
+
+    def decode_uuid_bytes(self, data: bytes) -> Optional[dict]:
+        """
+        Interpret 16 octets as UUID/GUID.
+        """
+        if len(data) != 16:
+            return None
+        try:
+            u = uuid.UUID(bytes=data)
+        except Exception:
+            return None
+        return {"type": "uuid", "value": str(u), "raw_hex": data.hex()}
+
+    def decode_unix_timestamp(self, data: bytes) -> Optional[dict]:
+        """
+        Interpret 4 or 8 byte integers as Unix timestamps (seconds, ms, or µs).
+        """
+        if len(data) not in (4, 8):
+            return None
+
+        value = int.from_bytes(data, byteorder="big", signed=False)
+        min_seconds = 946684800  # 2000-01-01
+        max_seconds = 4102444800  # 2100-01-01
+
+        def build(seconds: float, precision: str):
+            dt = datetime.fromtimestamp(seconds, tz=timezone.utc)
+            return {
+                "type": "unix_timestamp",
+                "precision": precision,
+                "iso8601": dt.isoformat(),
+                "value": value,
+                "raw_hex": data.hex()
+            }
+
+        if min_seconds <= value <= max_seconds:
+            return build(value, "seconds")
+
+        milliseconds = value / 1000.0
+        if min_seconds <= milliseconds <= max_seconds:
+            return build(milliseconds, "milliseconds")
+
+        microseconds = value / 1_000_000.0
+        if min_seconds <= microseconds <= max_seconds:
+            return build(microseconds, "microseconds")
+
+        return None
+
+    def decode_unsigned_identifier(self, data: bytes, max_len: int = 8) -> Optional[dict]:
+        """
+        Treat short byte blobs as unsigned integers (common for identifiers/counters).
+        """
+        if not data or len(data) > max_len:
+            return None
+        value = int.from_bytes(data, byteorder="big", signed=False)
+        return {
+            "type": "uint",
+            "bytes": len(data),
+            "int": value,
+            "decimal": str(value),
+            "hex": data.hex()
+        }
 
     def decode_communication_identifier_blob(self, data: bytes) -> Optional[dict]:
         """
@@ -402,6 +515,61 @@ class ASN1Decoder:
             if result:
                 return result
 
+        # PLMN (MCC/MNC) identifiers
+        if any(kw in context_lower for kw in ["plmn", "mcc", "mnc"]):
+            result = self.decode_plmn(data)
+            if result:
+                return result
+
+        # IP addresses
+        ip_context = (
+            any(kw in context_lower for kw in [
+                "ipv4", "ipv6", "ipaddress", "ip-address", "ipaddr",
+                "ggsnaddress", "sgsnaddress", "mmeaddress", "mmeipaddress",
+                "pdnaddress", "data-node-address", "datanodeaddress", "ipvalue"
+            ])
+            or ("ip" in context_lower and any(marker in context_lower for marker in ["address", "addr", "endpoint", "node", "host"]))
+        )
+        if ip_context:
+            result = self.decode_ip_address(data)
+            if result:
+                return result
+
+        # Unix timestamps
+        time_keywords = ["timestamp", "time", "eventtime", "generationtime", "microsecond", "millisecond", "epoch"]
+        if any(kw in context_lower for kw in time_keywords):
+            result = self.decode_unix_timestamp(data)
+            if result:
+                return result
+
+        # UUID/GUID
+        uuid_keywords = ["uuid", "guid", "traceid", "sessionid", "transactionid", "correlationid"]
+        if any(kw in context_lower for kw in uuid_keywords):
+            result = self.decode_uuid_bytes(data)
+            if result:
+                return result
+
+        # Generic unsigned identifiers
+        id_keywords = [
+            "identifier",
+            "liid",
+            "counter",
+            "sequence",
+            "seq",
+            "reference",
+            "correlation",
+            "recordid",
+            "requestid",
+            "messageid",
+            "userid",
+            "index",
+            "offset"
+        ]
+        if any(kw in context_lower for kw in id_keywords):
+            result = self.decode_unsigned_identifier(data)
+            if result:
+                return result
+
         # Communication Identifier / CIN heuristic
         cin_keywords = [
             "cin",
@@ -455,6 +623,24 @@ class ASN1Decoder:
         # Check if it could be Global Cell ID
         if 5 <= len(data) <= 7:
             result = self.decode_global_cell_id(data)
+            if result:
+                return result
+
+        # Heuristic PLMN decoding when data is 3 bytes of BCD digits
+        if len(data) == 3:
+            result = self.decode_plmn(data)
+            if result:
+                return result
+
+        # Check for UUIDs when data is 16 bytes and looks structured
+        if len(data) == 16 and data not in (b"\x00" * 16, b"\xff" * 16):
+            result = self.decode_uuid_bytes(data)
+            if result:
+                return result
+
+        # Timestamp heuristic without context if bytes look like sane epoch
+        if len(data) in (4, 8):
+            result = self.decode_unix_timestamp(data)
             if result:
                 return result
         
