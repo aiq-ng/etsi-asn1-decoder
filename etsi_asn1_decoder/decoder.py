@@ -504,7 +504,9 @@ class ASN1Decoder:
                 last_exc = e
         return None, last_exc
 
-    def process(self, input_file, roots='', encoding='der'):
+    # Process a single file
+    # Returns (status, result)
+    def process(self, input_file, roots='', encoding='der') -> Tuple[bool, Any]:
         candidate_roots = [r.strip() for r in roots.split(',') if r.strip()]
         if not candidate_roots:
             candidate_roots = ['IRIsContent', 'IRIRecord', 'IRI-Begin', 'IRI-Continue', 'IRI-End', 'IRI', 'PS-PDU']
@@ -514,7 +516,21 @@ class ASN1Decoder:
 
         root_used, result = self.try_decode_file(self.spec, candidate_roots, data)
 
-        return root_used, result
+        base_name = os.path.splitext(input_file)[0]
+        if root_used:
+            json_safe = self.make_json_safe(result, spec=self.spec)
+            return True, {
+                "decoded_with_root": root_used,
+                "content": json_safe
+            }
+
+        else:
+            reason = f"Failed to decode \n\n" + \
+                     "Tried roots: " + ", ".join(candidate_roots) + "\n\n" + \
+                     "Exception:\n" + repr(result) + "\n\n" + \
+                     "Exception (str):\n" + str(result) + "\n"
+            
+            return False, reason
 
     def process_dir(self, input_dir, output_dir, roots='', encoding='der', save_raw_on_fail=True, asn_try_nested=True, nested_types=None):
         os.makedirs(output_dir, exist_ok=True)
