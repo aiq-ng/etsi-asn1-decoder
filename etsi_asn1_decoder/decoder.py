@@ -96,7 +96,7 @@ class ASN1Decoder:
             # Remove leading digit if it's parity/filler (often '1')
             if imsi_digits[0] in ['1', '9']:
                 imsi_digits = imsi_digits[1:]
-            return f"IMSI:{imsi_digits}"
+            return f"{imsi_digits}"
         
         return None
 
