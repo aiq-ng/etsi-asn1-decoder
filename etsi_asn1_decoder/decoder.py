@@ -697,7 +697,7 @@ class ASN1Decoder:
 
         return None, last_exc
 
-    def make_json_safe(self, obj: Any, spec=None, asn_try_nested=False, nested_types=None, context_path: str = "") -> Any:
+    def make_json_safe(self, obj: Any, spec=None, asn_try_nested=True, nested_types=None, context_path: str = "") -> Any:
         """
         Convert decoded ASN.1 object (from asn1tools) into JSON-safe representation.
         - bytes/bytearray => check: printable string, or try nested ASN.1 decode (if spec/asn_try_nested True),
@@ -739,8 +739,11 @@ class ASN1Decoder:
         if isinstance(obj, dict):
             return {k: self.make_json_safe(v, spec=spec, asn_try_nested=asn_try_nested, nested_types=nested_types, context_path=f"{context_path}.{k}" if context_path else k) for k, v in obj.items()}
         if isinstance(obj, (list, tuple)):
-            # For lists, keep same context path since list items are typically same type
-            return [self.make_json_safe(v, spec=spec, asn_try_nested=asn_try_nested, nested_types=nested_types, context_path=context_path) for v in obj]
+            items = []
+            for idx, v in enumerate(obj):
+                next_ctx = f"{context_path}[{idx}]" if context_path else f"[{idx}]"
+                items.append(self.make_json_safe(v, spec=spec, asn_try_nested=asn_try_nested, nested_types=nested_types, context_path=next_ctx))
+            return items
 
         # ints, floats, str, bool, None are JSON serializable
         return obj
