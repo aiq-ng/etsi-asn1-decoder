@@ -259,7 +259,6 @@ class ASN1Decoder:
             "type": "uint",
             "bytes": len(data),
             "int": value,
-            "decimal": str(value),
             "hex": data.hex()
         }
 
@@ -282,7 +281,6 @@ class ASN1Decoder:
             "raw_hex": data.hex(),
             "cin": {
                 "int": cin_value,
-                "decimal": str(cin_value),
                 "hex": cin_bytes.hex()
             }
         }
@@ -699,7 +697,7 @@ class ASN1Decoder:
 
         return None, last_exc
 
-    def make_json_safe(self, obj: Any, spec=None, asn_try_nested=True, nested_types=None, context_path: str = "") -> Any:
+    def make_json_safe(self, obj: Any, spec=None, asn_try_nested=False, nested_types=None, context_path: str = "") -> Any:
         """
         Convert decoded ASN.1 object (from asn1tools) into JSON-safe representation.
         - bytes/bytearray => check: printable string, or try nested ASN.1 decode (if spec/asn_try_nested True),
