@@ -9,6 +9,7 @@ import asn1tools
 from typing import Any, Optional, Tuple
 import orjson
 import re
+import math
 
 
 class ASN1Decoder:   
@@ -336,7 +337,8 @@ class ASN1Decoder:
         
         try:
             # First byte is SMS-DELIVER message type indicator
-            mti = data[0] & 0x03
+            first_octet = data[0]
+            mti = first_octet & 0x03
             
             # For SMS-DELIVER (mti = 0x00), rough structure:
             # - Byte 0: MTI + flags
@@ -391,6 +393,7 @@ class ASN1Decoder:
             
             # User Data
             user_data = data[idx:]
+            has_udh = bool(first_octet & 0x40)
             
             # Determine encoding from DCS (bits 2-3 select alphabet per 3GPP TS 23.038)
             alphabet_bits = dcs & 0x0C
@@ -405,17 +408,54 @@ class ASN1Decoder:
             
             # Try to decode user data
             message_text = None
+            payload_bytes = user_data
+            payload_hex_bytes = user_data
+            payload_udl = udl
+            septet_skip = 0
+            user_data_header = None
+
+            if has_udh and user_data:
+                udhl = user_data[0]
+                header_end = 1 + udhl
+                if len(user_data) >= header_end:
+                    udh_raw = user_data[1:header_end]
+                    user_data_header = {
+                        "length": udhl,
+                        "raw_hex": udh_raw.hex()
+                    }
+                    payload_hex_bytes = user_data[header_end:]
+                    if encoding == "gsm-7bit":
+                        header_bits = (udhl + 1) * 8
+                        septet_skip = math.ceil(header_bits / 7)
+                        payload_udl = max(0, udl - septet_skip)
+                    else:
+                        payload_bytes = payload_hex_bytes
+                        payload_udl = max(0, udl - (udhl + 1))
+                else:
+                    payload_bytes = b""
+                    payload_hex_bytes = b""
+                    payload_udl = 0
+
+            if encoding != "gsm-7bit":
+                if payload_udl > 0:
+                    payload_decode_bytes = payload_bytes[:min(len(payload_bytes), payload_udl)]
+                    payload_hex_bytes = payload_decode_bytes
+                else:
+                    payload_decode_bytes = b""
+                    payload_hex_bytes = b""
+            else:
+                payload_decode_bytes = payload_bytes
             if encoding == "gsm-7bit":
-                # GSM 7-bit decoding (simplified - doesn't handle all edge cases)
-                message_text = self.decode_gsm7bit(user_data, udl)
+                # GSM 7-bit decoding (handles UDHI offset via septet_skip)
+                message_text = self.decode_gsm7bit(user_data, payload_udl, start_septet=septet_skip)
             elif encoding == "ucs-2":
                 try:
-                    message_text = user_data.decode('utf-16-be')
+                    message_text = payload_decode_bytes.decode('utf-16-be')
                 except:
                     pass
             elif encoding == "8-bit":
                 try:
-                    message_text = user_data.decode('latin1')
+                    message_text = payload_decode_bytes.decode('latin1')
                 except:
                     pass
             
@@ -430,33 +470,36 @@ class ASN1Decoder:
             if message_text:
                 result["message"] = message_text
             else:
-                result["user_data_hex"] = user_data.hex()
+                result["user_data_hex"] = payload_hex_bytes.hex()
+            if user_data_header:
+                result["user_data_header"] = user_data_header
             
             return result
         
         except Exception as e:
             return None
 
-    def decode_gsm7bit(self, data: bytes, length: int) -> Optional[str]:
+    def decode_gsm7bit(self, data: bytes, length: int, start_septet: int = 0) -> Optional[str]:
         """
         Decode GSM 7-bit packed encoding.
-        length is the number of septets (7-bit characters).
+        - length is the number of septets (7-bit characters) to extract.
+        - start_septet lets us skip initial septets (useful when UDHI is present).
         """
         GSM7_BASIC = (
             "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞ\x1bÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?"
             "¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà"
         )
         
-        if not data:
+        if not data or length <= 0:
             return None
         
         try:
             result = []
-            bit_offset = 0
             
             for i in range(length):
-                byte_offset = (i * 7) // 8
-                shift = (i * 7) % 8
+                total_index = start_septet + i
+                byte_offset = (total_index * 7) // 8
+                shift = (total_index * 7) % 8
                 
                 if byte_offset >= len(data):
                     break
@@ -473,7 +516,7 @@ class ASN1Decoder:
                 else:
                     result.append('?')
             
-            return ''.join(result)
+            return ''.join(result) if result else None
         except:
             return None
 
