@@ -392,14 +392,16 @@ class ASN1Decoder:
             # User Data
             user_data = data[idx:]
             
-            # Determine encoding from DCS
-            encoding = "gsm-7bit"
-            if (dcs & 0x04) == 0:
+            # Determine encoding from DCS (bits 2-3 select alphabet per 3GPP TS 23.038)
+            alphabet_bits = dcs & 0x0C
+            if alphabet_bits == 0x00:
                 encoding = "gsm-7bit"
-            elif (dcs & 0x08):
+            elif alphabet_bits == 0x04:
+                encoding = "8-bit"
+            elif alphabet_bits == 0x08:
                 encoding = "ucs-2"
             else:
-                encoding = "8-bit"
+                encoding = "gsm-7bit"  # reserved => fall back to GSM7
             
             # Try to decode user data
             message_text = None
