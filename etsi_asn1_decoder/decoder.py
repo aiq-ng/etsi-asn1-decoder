@@ -467,10 +467,13 @@ class ASN1Decoder:
             
             if originating_address:
                 result["originating_address"] = originating_address
-            if message_text:
+            message_is_readable = message_text and self.looks_like_readable_text(message_text)
+            if message_is_readable:
                 result["message"] = message_text
             else:
                 result["user_data_hex"] = payload_hex_bytes.hex()
+                if message_text:
+                    result["decoded_text_preview"] = message_text
             if user_data_header:
                 result["user_data_header"] = user_data_header
             
@@ -699,6 +702,16 @@ class ASN1Decoder:
         # Accept common printable range plus newline/tab
         return all((31 < ord(ch) < 127) or ch in '\r\n\t' for ch in s)
 
+    def looks_like_readable_text(self, text: str, threshold: float = 0.7) -> bool:
+        """
+        Heuristic: ensure decoded text contains a high fraction of printable characters.
+        Helps suppress random-looking output when payload isn't actually text.
+        """
+        if not text:
+            return False
+        printable = sum(1 for ch in text if (ch.isprintable() and ch not in '\x0b\x0c') or ch in '\r\n\t')
+        return (printable / len(text)) >= threshold
+
     def try_asn1_decode_bytes(self, spec, data: bytes, types_to_try: Optional[list] = None):
         """
         Try to decode `data` using ASN.1 `spec` for each type in types_to_try.
@@ -821,13 +834,10 @@ class ASN1Decoder:
 
     # Process a single file
     # Returns (status, result)
-    def process(self, input_file, roots='', encoding='der') -> Tuple[bool, Any]:
+    def process_bytes(self, data, roots='', encoding='der') -> Tuple[bool, Any]:
         candidate_roots = [r.strip() for r in roots.split(',') if r.strip()]
         if not candidate_roots:
             candidate_roots = ['IRIsContent', 'IRIRecord', 'IRI-Begin', 'IRI-Continue', 'IRI-End', 'IRI', 'PS-PDU']
-
-        with open(input_file, 'rb') as f:
-            data = f.read()
 
         root_used, result = self.try_decode_file(self.spec, candidate_roots, data)
         
@@ -845,6 +855,11 @@ class ASN1Decoder:
                      "Exception (str):\n" + str(result) + "\n"
             
             return False, reason
+        
+    def process(self, input_file, roots='', encoding='der') -> Tuple[bool, Any]:
+        with open(input_file, 'rb') as f:
+            data = f.read()
+        return self.process_bytes(data, roots=roots, encoding=encoding)
 
     def process_dir(self, input_dir, output_dir, roots='', encoding='der', save_raw_on_fail=True, asn_try_nested=True, nested_types=None):
         os.makedirs(output_dir, exist_ok=True)
