@@ -529,7 +529,7 @@ class ASN1Decoder:
         """
         ctx = context.lower()
         cc_markers = [
-            "cccontent",
+            "cccontents",
             "cc-content",
             "cc_pdu",
             "cc-pdu",
@@ -852,6 +852,7 @@ class ASN1Decoder:
 
                 # Prefer CC-related types when the context hints at call content
                 if self.is_cc_context(context_lower):
+                    print("yes is cc context")
                     cc_types = self._cc_type_candidates(spec, nested_types=nested_types)
                     tname, decoded = self.try_asn1_decode_bytes(spec, b, types_to_try=cc_types)
 
@@ -859,9 +860,9 @@ class ASN1Decoder:
                 if tname is None:
                     tname, decoded = self.try_asn1_decode_bytes(spec, b, types_to_try=nested_types)
 
-                # # Skip nested decoding for "Payload" type - keep as hex (but try smart decode)
-                # if tname and tname != "Payload":
-                #     return {"_decoded_as": tname, "value": self.make_json_safe(decoded, spec=spec, asn_try_nested=asn_try_nested, nested_types=nested_types, context_path=context_path)}
+                # Skip nested decoding for "Payload" type - keep as hex (but try smart decode)
+                if tname and tname != "Payload":
+                    return {"_decoded_as": tname, "value": self.make_json_safe(decoded, spec=spec, asn_try_nested=asn_try_nested, nested_types=nested_types, context_path=context_path)}
                 # else fallthrough to smart decode
 
             # 3) Try smart decoding based on context and patterns
