@@ -523,6 +523,74 @@ class ASN1Decoder:
         except:
             return None
 
+    def is_cc_context(self, context: str) -> bool:
+        """
+        Identify ccContent/CC-PDU like fields from the context path.
+        """
+        ctx = context.lower()
+        cc_markers = [
+            "cccontent",
+            "cc-content",
+            "cc_pdu",
+            "cc-pdu",
+            "ccpdu",
+            "callcontent"
+        ]
+        return any(marker in ctx for marker in cc_markers)
+
+    def _collect_type_names(self, spec) -> list:
+        """
+        Collect all visible type names from an asn1tools spec object.
+        """
+        names = []
+        for attr in ("types", "_types"):
+            val = getattr(spec, attr, None)
+            if isinstance(val, dict):
+                names.extend(val.keys())
+
+        modules = getattr(spec, "modules", None)
+        if isinstance(modules, dict):
+            for mod_types in modules.values():
+                if isinstance(mod_types, dict):
+                    names.extend(mod_types.keys())
+
+        # Preserve order but drop duplicates
+        seen = set()
+        uniq = []
+        for name in names:
+            if name not in seen:
+                uniq.append(name)
+                seen.add(name)
+        return uniq
+
+    def _cc_type_candidates(self, spec, nested_types=None) -> list:
+        """
+        Build a prioritized list of ASN.1 types that look like CC/CC-PDU payloads.
+        """
+        candidates = []
+        if nested_types:
+            candidates.extend(nested_types)
+
+        # Commonly used names across ETSI LI CC specs
+        candidates.extend([
+            "CC-PDU",
+            "CC_PDU",
+            "CCPDU",
+            "CC-Content",
+            "CCContent",
+            "CC-Content-WithSessionData",
+            "CC-Content-With-Session-Data"
+        ])
+
+        # Add anything in the spec that hints at CC/CallContent
+        for name in self._collect_type_names(spec):
+            lname = name.lower()
+            if "cc" in lname and ("pdu" in lname or "content" in lname):
+                if name not in candidates:
+                    candidates.append(name)
+
+        return candidates
+
     def smart_decode_hex(self, data: bytes, context: str = "") -> Any:
         """
         Attempt to intelligently decode hex data based on context and data patterns.
@@ -768,6 +836,8 @@ class ASN1Decoder:
         if isinstance(obj, (bytes, bytearray)):
             b = bytes(obj)
             # 1) printable UTF-8?
+            context_lower = context_path.lower()
+
             if self.is_printable_ascii(b):
                 try:
                     return b.decode('utf-8')
@@ -777,10 +847,21 @@ class ASN1Decoder:
 
             # 2) optionally, try to interpret the bytes as ASN.1 using the compiled spec
             if asn_try_nested and spec is not None:
-                tname, decoded = self.try_asn1_decode_bytes(spec, b, types_to_try=nested_types)
-                # Skip nested decoding for "Payload" type - keep as hex (but try smart decode)
-                if tname and tname != "Payload":
-                    return {"_decoded_as": tname, "value": self.make_json_safe(decoded, spec=spec, asn_try_nested=asn_try_nested, nested_types=nested_types, context_path=context_path)}
+                tname = None
+                decoded = None
+
+                # Prefer CC-related types when the context hints at call content
+                if self.is_cc_context(context_lower):
+                    cc_types = self._cc_type_candidates(spec, nested_types=nested_types)
+                    tname, decoded = self.try_asn1_decode_bytes(spec, b, types_to_try=cc_types)
+
+                # Fallback to the general search if CC-specific attempt failed
+                if tname is None:
+                    tname, decoded = self.try_asn1_decode_bytes(spec, b, types_to_try=nested_types)
+
+                # # Skip nested decoding for "Payload" type - keep as hex (but try smart decode)
+                # if tname and tname != "Payload":
+                #     return {"_decoded_as": tname, "value": self.make_json_safe(decoded, spec=spec, asn_try_nested=asn_try_nested, nested_types=nested_types, context_path=context_path)}
                 # else fallthrough to smart decode
 
             # 3) Try smart decoding based on context and patterns
@@ -834,15 +915,19 @@ class ASN1Decoder:
 
     # Process a single file
     # Returns (status, result)
-    def process_bytes(self, data, roots='', encoding='der') -> Tuple[bool, Any]:
+    def process_bytes(self, data, roots='', encoding='der', asn_try_nested=True, nested_types=None) -> Tuple[bool, Any]:
         candidate_roots = [r.strip() for r in roots.split(',') if r.strip()]
         if not candidate_roots:
             candidate_roots = ['IRIsContent', 'IRIRecord', 'IRI-Begin', 'IRI-Continue', 'IRI-End', 'IRI', 'PS-PDU']
 
+        nested_types_list = None
+        if nested_types:
+            nested_types_list = [t.strip() for t in nested_types.split(',') if t.strip()]
+
         root_used, result = self.try_decode_file(self.spec, candidate_roots, data)
         
         if root_used:
-            json_safe = self.make_json_safe(result, spec=self.spec)
+            json_safe = self.make_json_safe(result, spec=self.spec, asn_try_nested=asn_try_nested, nested_types=nested_types_list)
             return True, {
                 "decoded_with_root": root_used,
                 "content": json_safe
@@ -856,10 +941,10 @@ class ASN1Decoder:
             
             return False, reason
         
-    def process(self, input_file, roots='', encoding='der') -> Tuple[bool, Any]:
+    def process(self, input_file, roots='', encoding='der', asn_try_nested=True, nested_types=None) -> Tuple[bool, Any]:
         with open(input_file, 'rb') as f:
             data = f.read()
-        return self.process_bytes(data, roots=roots, encoding=encoding)
+        return self.process_bytes(data, roots=roots, encoding=encoding, asn_try_nested=asn_try_nested, nested_types=nested_types)
 
     def process_dir(self, input_dir, output_dir, roots='', encoding='der', save_raw_on_fail=True, asn_try_nested=True, nested_types=None):
         os.makedirs(output_dir, exist_ok=True)
