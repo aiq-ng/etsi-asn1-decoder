@@ -860,8 +860,7 @@ class ASN1Decoder:
                 if tname is None:
                     tname, decoded = self.try_asn1_decode_bytes(spec, b, types_to_try=nested_types)
 
-                # Skip nested decoding for "Payload" type - keep as hex (but try smart decode)
-                if tname and tname != "Payload":
+                if tname:
                     return {"_decoded_as": tname, "value": self.make_json_safe(decoded, spec=spec, asn_try_nested=asn_try_nested, nested_types=nested_types, context_path=context_path)}
                 # else fallthrough to smart decode
 
