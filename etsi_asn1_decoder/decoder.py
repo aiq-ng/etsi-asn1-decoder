@@ -852,7 +852,6 @@ class ASN1Decoder:
 
                 # Prefer CC-related types when the context hints at call content
                 if self.is_cc_context(context_lower):
-                    print("yes is cc context")
                     cc_types = self._cc_type_candidates(spec, nested_types=nested_types)
                     tname, decoded = self.try_asn1_decode_bytes(spec, b, types_to_try=cc_types)
 
