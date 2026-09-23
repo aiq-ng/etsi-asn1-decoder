@@ -9,7 +9,7 @@ import asn1tools
 from typing import Any, Optional, Tuple
 import orjson
 import re
-import math
+from .sms import decode_tpdu, decode_gsm7, reassemble_sms
 
 
 class ASN1Decoder:   
@@ -327,200 +327,24 @@ class ASN1Decoder:
 
         return decoded
 
-    def decode_sms_pdu(self, data: bytes) -> Optional[dict]:
-        """
-        Decode SMS-DELIVER PDU (simplified version).
-        This handles the content field of SMS-report which contains SMS TPDU.
-        """
-        if len(data) < 2:
-            return None
-        
-        try:
-            # First byte is SMS-DELIVER message type indicator
-            first_octet = data[0]
-            mti = first_octet & 0x03
-            
-            # For SMS-DELIVER (mti = 0x00), rough structure:
-            # - Byte 0: MTI + flags
-            # - Byte 1-n: Originating address (variable)
-            # - Protocol ID, DCS, Timestamp, UDL, UD
-            
-            idx = 1
-            
-            # Originating address length (in digits)
-            if idx >= len(data):
-                return None
-            oa_len = data[idx]
-            idx += 1
-            
-            # Type of address
-            if idx >= len(data):
-                return None
-            oa_type = data[idx]
-            idx += 1
-            
-            # Address digits (BCD)
-            oa_bytes = (oa_len + 1) // 2
-            if idx + oa_bytes > len(data):
-                return None
-            oa_data = data[idx:idx + oa_bytes]
-            originating_address = self.decode_bcd_phone_number(oa_data)
-            idx += oa_bytes
-            
-            # PID
-            if idx >= len(data):
-                return None
-            pid = data[idx]
-            idx += 1
-            
-            # DCS (Data Coding Scheme)
-            if idx >= len(data):
-                return None
-            dcs = data[idx]
-            idx += 1
-            
-            # Timestamp (7 bytes)
-            if idx + 7 > len(data):
-                return None
-            timestamp = data[idx:idx + 7]
-            idx += 7
-            
-            # UDL (User Data Length)
-            if idx >= len(data):
-                return None
-            udl = data[idx]
-            idx += 1
-            
-            # User Data
-            user_data = data[idx:]
-            has_udh = bool(first_octet & 0x40)
-            
-            # Determine encoding from DCS (bits 2-3 select alphabet per 3GPP TS 23.038)
-            alphabet_bits = dcs & 0x0C
-            if alphabet_bits == 0x00:
-                encoding = "gsm-7bit"
-            elif alphabet_bits == 0x04:
-                encoding = "8-bit"
-            elif alphabet_bits == 0x08:
-                encoding = "ucs-2"
-            else:
-                encoding = "gsm-7bit"  # reserved => fall back to GSM7
-            
-            # Try to decode user data
-            message_text = None
-            payload_bytes = user_data
-            payload_hex_bytes = user_data
-            payload_udl = udl
-            septet_skip = 0
-            user_data_header = None
+    def decode_sms_pdu(self, data: bytes, direction: Optional[str] = None,
+                       report_kind: Optional[str] = None) -> Optional[dict]:
+        """Decode a bare SMS TPDU; optionally supply direction and RP ACK/error.
 
-            if has_udh and user_data:
-                udhl = user_data[0]
-                header_end = 1 + udhl
-                if len(user_data) >= header_end:
-                    udh_raw = user_data[1:header_end]
-                    user_data_header = {
-                        "length": udhl,
-                        "raw_hex": udh_raw.hex()
-                    }
-                    payload_hex_bytes = user_data[header_end:]
-                    if encoding == "gsm-7bit":
-                        header_bits = (udhl + 1) * 8
-                        septet_skip = math.ceil(header_bits / 7)
-                        payload_udl = max(0, udl - septet_skip)
-                    else:
-                        payload_bytes = payload_hex_bytes
-                        payload_udl = max(0, udl - (udhl + 1))
-                else:
-                    payload_bytes = b""
-                    payload_hex_bytes = b""
-                    payload_udl = 0
+        Invalid data returns None. Ambiguous layouts return SMS-AMBIGUOUS.
+        See sms.decode_tpdu for accepted context values.
+        """
+        return decode_tpdu(data, direction=direction, report_kind=report_kind)
 
-            if encoding != "gsm-7bit":
-                if payload_udl > 0:
-                    payload_decode_bytes = payload_bytes[:min(len(payload_bytes), payload_udl)]
-                    payload_hex_bytes = payload_decode_bytes
-                else:
-                    payload_decode_bytes = b""
-                    payload_hex_bytes = b""
-            else:
-                payload_decode_bytes = payload_bytes
-            if encoding == "gsm-7bit":
-                # GSM 7-bit decoding (handles UDHI offset via septet_skip)
-                message_text = self.decode_gsm7bit(user_data, payload_udl, start_septet=septet_skip)
-            elif encoding == "ucs-2":
-                try:
-                    message_text = payload_decode_bytes.decode('utf-16-be')
-                except:
-                    pass
-            elif encoding == "8-bit":
-                try:
-                    message_text = payload_decode_bytes.decode('latin1')
-                except:
-                    pass
-            
-            result = {
-                "type": "SMS-DELIVER",
-                "encoding": encoding,
-                "raw_hex": data.hex()
-            }
-            
-            if originating_address:
-                result["originating_address"] = originating_address
-            message_is_readable = message_text and self.looks_like_readable_text(message_text)
-            if message_is_readable:
-                result["message"] = message_text
-            else:
-                result["user_data_hex"] = payload_hex_bytes.hex()
-                if message_text:
-                    result["decoded_text_preview"] = message_text
-            if user_data_header:
-                result["user_data_header"] = user_data_header
-            
-            return result
-        
-        except Exception as e:
-            return None
+    def reassemble_sms(self, parts) -> dict:
+        """Reassemble decoded segments selected from one conversation/message."""
+        return reassemble_sms(parts)
 
     def decode_gsm7bit(self, data: bytes, length: int, start_septet: int = 0) -> Optional[str]:
-        """
-        Decode GSM 7-bit packed encoding.
-        - length is the number of septets (7-bit characters) to extract.
-        - start_septet lets us skip initial septets (useful when UDHI is present).
-        """
-        GSM7_BASIC = (
-            "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞ\x1bÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?"
-            "¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà"
-        )
-        
-        if not data or length <= 0:
-            return None
-        
+        """Decode packed GSM-7 including extensions; reject truncated data."""
         try:
-            result = []
-            
-            for i in range(length):
-                total_index = start_septet + i
-                byte_offset = (total_index * 7) // 8
-                shift = (total_index * 7) % 8
-                
-                if byte_offset >= len(data):
-                    break
-                
-                char_code = data[byte_offset] >> shift
-                
-                if shift > 1 and byte_offset + 1 < len(data):
-                    char_code |= (data[byte_offset + 1] << (8 - shift))
-                
-                char_code &= 0x7F
-                
-                if char_code < len(GSM7_BASIC):
-                    result.append(GSM7_BASIC[char_code])
-                else:
-                    result.append('?')
-            
-            return ''.join(result) if result else None
-        except:
+            return decode_gsm7(data, length, start_septet)
+        except ValueError:
             return None
 
     def is_cc_context(self, context: str) -> bool:
@@ -610,7 +434,9 @@ class ASN1Decoder:
             result = self.decode_sms_pdu(data)
             if result:
                 return {"decoded_sms": result}
-        
+            # A failed SMS parse must not fall through to unrelated heuristics.
+            return "hex:" + data.hex()
+
         # IMSI
         if "imsi" in context_lower or (3 <= len(data) <= 8):
             result = self.decode_imsi(data)
@@ -837,6 +663,8 @@ class ASN1Decoder:
             b = bytes(obj)
             # 1) printable UTF-8?
             context_lower = context_path.lower()
+            if "sms" in context_lower and "content" in context_lower:
+                return self.smart_decode_hex(b, context=context_path)
 
             if self.is_printable_ascii(b):
                 try:
