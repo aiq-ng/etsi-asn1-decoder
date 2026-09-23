@@ -9,6 +9,11 @@ from etsi_asn1_decoder.sms import decode_tpdu, decode_gsm7, decode_dcs, reassemb
 ADDRESS = bytes.fromhex("05912143f5")
 STAMP = bytes.fromhex("62904221436540")
 HELLO = bytes.fromhex("e8329bfd06")  # GSM septets for 'hello'
+EMOJI_DELIVER = bytes.fromhex(
+    "040d91328411979354f70008629042006200403e00410063006b002000770069007400680020"
+    "007400680061006e006b00730067006900760069006e0067002700730020d83dde052705d83dde33d83dde2d"
+)
+EMOJI_TEXT = "Ack with thanksgiving's 😅✅😳😭"
 
 
 def pack(codes, header=b""):
@@ -45,6 +50,16 @@ def segment(sequence, text, *, total=2, reference=7, wide=False, dcs=0, ports=b"
 
 
 class SMSDecodingTests(unittest.TestCase):
+    def test_deliver_text_wins_over_permissive_report_parse(self):
+        decoded = decode_tpdu(EMOJI_DELIVER)
+        self.assertEqual(decoded["type"], "SMS-DELIVER")
+        self.assertEqual(decoded["message"], EMOJI_TEXT)
+        self.assertEqual(decoded["originating_address"], "+2348117939457")
+        self.assertNotIn("candidates", decoded)
+        # The explicit caller context still wins over automatic preferences.
+        report = decode_tpdu(EMOJI_DELIVER, "ms-to-sc", "ack")
+        self.assertEqual(report["type"], "SMS-DELIVER-REPORT")
+
     def test_fixed_deliver_vector_and_metadata(self):
         wire = bytes.fromhex("0005912143f500006290422143654005e8329bfd06")
         decoded = decode_tpdu(wire)

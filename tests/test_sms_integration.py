@@ -5,7 +5,7 @@ import asn1tools
 import orjson
 
 from etsi_asn1_decoder.decoder import ASN1Decoder
-from test_sms import HELLO, deliver, segment, submit
+from test_sms import HELLO, EMOJI_DELIVER, EMOJI_TEXT, deliver, segment, submit
 
 
 class SMSIntegrationTests(unittest.TestCase):
@@ -30,6 +30,19 @@ class SMSIntegrationTests(unittest.TestCase):
             self.assertEqual(sms["type"], expected)
             self.assertEqual(sms["message"], "hello")
             orjson.dumps(result)
+
+    def test_reported_etsi_sms_content_decodes_to_text(self):
+        record = {"sMS": {"sMS-Contents": {
+            "content": EMOJI_DELIVER,
+            "other-message": "undefined",
+            "sms-initiator": "server",
+            "transfer-status": "succeed-transfer",
+        }}}
+        result = self.decoder.make_json_safe(record, spec=self.spec, asn_try_nested=True)
+        sms = result["sMS"]["sMS-Contents"]["content"]["decoded_sms"]
+        self.assertEqual(sms["type"], "SMS-DELIVER")
+        self.assertEqual(sms["message"], EMOJI_TEXT)
+        self.assertEqual(orjson.loads(orjson.dumps(result)), result)
 
     def test_sms_context_precedes_ascii_nested_asn_and_other_heuristics(self):
         for value in (b"hello", b"\x12\x34\x56", deliver()[:-1], b""):

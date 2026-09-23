@@ -367,8 +367,10 @@ def decode_tpdu(data, direction=None, report_kind=None):
     """Return a decoded TPDU, an ambiguity record, or None for invalid data.
 
     direction: 'ms-to-sc' or 'sc-to-ms'. report_kind: 'ack' or 'error'
-    from the enclosing RP message. If omitted, accept only a unique complete
-    parse; never pick the first of multiple plausible interpretations.
+    from the enclosing RP message. Without hints, try the usual MTI layout
+    (DELIVER, SUBMIT, STATUS-REPORT) first. Only try the opposite direction
+    if that complete parse fails; permissive report extensions must not mask
+    a valid message. Explicit hints always take precedence.
     """
     if direction is not None and direction not in _TYPES:
         raise ValueError("direction must be 'ms-to-sc' or 'sc-to-ms'")
@@ -376,8 +378,18 @@ def decode_tpdu(data, direction=None, report_kind=None):
         raise ValueError("report_kind must be 'ack' or 'error'")
     if not data or len(data) > 164 or data[0] & 3 == 3:
         return None
+    directions = [direction] if direction else list(_TYPES)
+    if direction is None and report_kind is None:
+        preferred = "ms-to-sc" if data[0] & 3 == 1 else "sc-to-ms"
+        try:
+            result = _parse(data, preferred, None)
+        except ValueError:
+            directions.remove(preferred)
+        else:
+            result["direction_inferred"] = True
+            return result
     candidates = []
-    for candidate_direction in ([direction] if direction else _TYPES):
+    for candidate_direction in directions:
         kind = _TYPES[candidate_direction][data[0] & 3]
         is_report = kind in ("SMS-DELIVER-REPORT", "SMS-SUBMIT-REPORT")
         if report_kind and not is_report:

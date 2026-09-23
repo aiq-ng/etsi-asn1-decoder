@@ -24,10 +24,15 @@ centre to mobile) or `"ms-to-sc"` (mobile to service centre). For a report,
 pass `report_kind="ack"` or `"error"` from the enclosing RP message when known.
 Message-type bits alone do not distinguish every TPDU type.
 
-If context is omitted, only a unique, structurally valid interpretation is
-accepted, with `direction_inferred` / `report_kind_inferred` flags as applicable.
-Multiple valid interpretations return `type="SMS-AMBIGUOUS"`, candidate types,
-and the original hex, without a guessed message. Invalid or truncated TPDUs
+If context is omitted, automatic detection first tries the usual layout for the
+message-type bits: DELIVER, SUBMIT, or STATUS-REPORT. A successful complete parse
+is returned immediately so permissive report parsing cannot hide valid text.
+Only if that fails does it try the opposite direction (reports or COMMAND).
+Explicit direction/report hints override this preference. Inferred context is
+marked with `direction_inferred` / `report_kind_inferred` as applicable.
+If the fallback cannot distinguish ACK from error, it returns
+`type="SMS-AMBIGUOUS"`, candidate types, and the original hex.
+Invalid or truncated TPDUs
 return `None`; ASN.1 SMS content remains `hex:...` rather than falling through
 to phone-number, identifier, printable-text, or nested ASN.1 heuristics.
 
