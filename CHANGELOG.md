@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.1
+
+- Connect the exact `globalCellID` field to the MAP location decoder and add
+  the explicit `map-global-cell-id` profile format. Decode five-octet area
+  identities and seven-octet cell identities, retaining the full `raw_hex`.
+- Correct three-digit MNC ordering and reject nondecimal MCC/MNC digits or
+  misplaced filler. Unsupported lengths stay hex, including six-octet values
+  with an incomplete CI; no trailing octets are silently dropped.
+- Decode `operator-Identifier` as printable ASCII and
+  `network-Element-Identifier.e164-Format` as ISUP calling-party contents.
+  The equivalent `servingSystem.e164-Format` path is also covered. Exact
+  profile overrides and disabled built-ins continue to take precedence.
+- Add BER/DER integration and malformed-input regressions for location and
+  network identifiers, including two/three-digit MNCs and zero-prefixed codes.
+
 ## 0.2.0
 
 - Restore readable LIIDs and decimal CINs through exact ETSI field mappings.

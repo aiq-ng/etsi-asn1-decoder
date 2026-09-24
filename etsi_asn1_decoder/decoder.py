@@ -25,7 +25,7 @@ class ASN1Decoder:
         self.use_builtin_formats = use_builtin_formats
         supported = {"tbcd-digits", "imsi-tbcd", "imei-tbcd", "map-address",
                      "isup-called", "isup-calling", "ascii-digits", "ascii-text", "utf-8",
-                     "ipv4", "ipv6", "uuid", "uint-be", "hex"}
+                     "map-global-cell-id", "ipv4", "ipv6", "uuid", "uint-be", "hex"}
         for path, fmt in self.field_formats.items():
             if not isinstance(path, str) or not isinstance(fmt, str) or fmt not in supported:
                 raise ValueError(f"Invalid field format mapping: {path!r}: {fmt!r}")
@@ -113,42 +113,25 @@ class ASN1Decoder:
         return "IMEI:" + digits if digits is not None and len(digits) == 15 else None
 
     def decode_global_cell_id(self, data: bytes) -> Optional[dict]:
+        """Decode MAP GlobalCellId: PLMN + LAC, optionally a complete CI.
+
+        Five octets provide MCC/MNC/LAC; seven also provide the two-octet CI.
+        Other lengths, including an incomplete one-octet CI, remain opaque.
+        See TS 29.002, MAP-CommonDataTypes GlobalCellId.
         """
-        Decode Global Cell ID (5-7 octets per 3GPP TS 29.002).
-        Format: MCC (3 digits) + MNC (2-3 digits) + LAC (2 octets) + CI (2 octets)
-        """
-        if len(data) < 5:
+        if len(data) not in (5, 7):
             return None
-        
-        # MCC and MNC are BCD encoded in first 3 bytes
-        # Byte 0: MCC digit 2, MCC digit 1
-        # Byte 1: MNC digit 3, MCC digit 3
-        # Byte 2: MNC digit 2, MNC digit 1
-        
-        mcc_mnc = data[:3]
-        lac = int.from_bytes(data[3:5], 'big') if len(data) >= 5 else None
-        ci = int.from_bytes(data[5:7], 'big') if len(data) >= 7 else None
-        
-        # Decode MCC/MNC
-        mcc = f"{mcc_mnc[0] & 0x0F}{(mcc_mnc[0] >> 4) & 0x0F}{mcc_mnc[1] & 0x0F}"
-        mnc_digit3 = (mcc_mnc[1] >> 4) & 0x0F
-        mnc_base = f"{mcc_mnc[2] & 0x0F}{(mcc_mnc[2] >> 4) & 0x0F}"
-        
-        if mnc_digit3 == 0xF:
-            mnc = mnc_base  # 2-digit MNC
-        else:
-            mnc = f"{mnc_digit3}{mnc_base}"  # 3-digit MNC
-        
+        plmn = self.decode_plmn(data[:3])
+        if plmn is None:
+            return None
         result = {
-            "MCC": mcc,
-            "MNC": mnc,
-            "raw_hex": data.hex()
+            "MCC": plmn["MCC"],
+            "MNC": plmn["MNC"],
+            "LAC": str(int.from_bytes(data[3:5], 'big')),
+            "raw_hex": data.hex(),
         }
-        if lac is not None:
-            result["LAC"] = str(lac)
-        if ci is not None:
-            result["CellID"] = str(ci)
-        
+        if len(data) == 7:
+            result["CellID"] = str(int.from_bytes(data[5:7], 'big'))
         return result
 
     def decode_plmn(self, data: bytes) -> Optional[dict]:
@@ -167,7 +150,9 @@ class ASN1Decoder:
         mnc_digit2 = (data[2] >> 4) & 0x0F
 
         digits = [mcc_digit1, mcc_digit2, mcc_digit3, mnc_digit1, mnc_digit2]
-        if any(d > 9 for d in digits if d != 0xF):
+        # Filler is allowed only in the third MNC digit, never in MCC or
+        # either of the first two MNC digits.
+        if any(d > 9 for d in digits):
             return None
 
         mcc = f"{mcc_digit1}{mcc_digit2}{mcc_digit3}"
@@ -435,6 +420,7 @@ class ASN1Decoder:
                 "imsi-tbcd": self.decode_imsi,
                 "imei-tbcd": self.decode_imei,
                 "map-address": self.decode_map_format_number,
+                "map-global-cell-id": self.decode_global_cell_id,
                 "isup-called": self.decode_isup_number,
                 "isup-calling": lambda value: self.decode_isup_number(value, calling=True),
                 "ipv4": lambda value: self.decode_ip_address(value) if len(value) == 4 else None,

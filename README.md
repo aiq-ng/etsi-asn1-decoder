@@ -48,6 +48,9 @@ The initial registry follows **ETSI TS 101 671 V3.14.1, annex D**, covering:
 | --- | --- |
 | `lawfulInterceptionIdentifier` | `ascii-text` |
 | `communication-Identity-Number` | `ascii-digits` |
+| `operator-Identifier` | `ascii-text` |
+| `globalCellID` | `map-global-cell-id` |
+| `network-Element-Identifier.e164-Format`, `servingSystem.e164-Format` | `isup-calling` |
 | `partyIdentity.imsi` | `imsi-tbcd` |
 | `partyIdentity.imei` | `imei-tbcd` |
 | `partyIdentity.msISDN` | `map-address` |
@@ -62,6 +65,21 @@ any enclosing record. List indices do not affect built-in matching. A bare
 `imsi`, an unrelated `other.imsi`, or an unsupported `dSS1-Format` remains hex.
 This registry implements known definitions; it does not infer semantics from
 arbitrary ASN.1 files. The initial registry is not exhaustive across ETSI profiles.
+
+`globalCellID` produces `MCC`, `MNC`, `LAC`, and (when present) `CellID`, plus
+the complete `raw_hex`. MCC/MNC remain digit strings with leading zeroes;
+LAC/CellID remain decimal strings for compatibility with the existing helper.
+The MAP format supports five octets (MCC/MNC/LAC) and seven octets (also CI).
+Six-octet values have an incomplete two-octet CI and remain hex, as do invalid
+digits, misplaced filler and other unsupported lengths. No partial CI is invented.
+This format does not apply to LTE/NR CGI, routing-area or service-area fields.
+
+The location layout follows [TS 29.002, MAP-CommonDataTypes GlobalCellId](https://www.etsi.org/deliver/etsi_ts/129000_129099/129002/17.02.00_60/ts_129002v170200p.pdf).
+Network element E.164 choices use the ISUP calling-party format specified in
+TS 101 671, including both header octets and odd-digit filler handling.
+`operator-Identifier` uses the exact field name under any enclosing record;
+unsupported text bytes retain hex. These mappings are independent of operator
+names and record variants, and use the same profile override rules as other fields.
 
 LIID and CIN use their exact, case-sensitive ETSI field names, including in
 standalone roots, CHOICE alternatives, and lists. ASCII LIIDs (numeric or textual,
@@ -108,6 +126,7 @@ Supported formats:
 | `imei-tbcd` | 15-digit IMEI in decimal TBCD |
 | `tbcd-digits` | Decimal TBCD, final high-nibble `F` filler only |
 | `map-address` | MAP AddressString, one TON/NPI octet then decimal TBCD |
+| `map-global-cell-id` | MAP MCC/MNC + two-octet LAC, optionally a complete two-octet CI; five or seven octets |
 | `isup-called`, `isup-calling` | Q.763 parameter contents, two header octets then decimal digits; excludes parameter tag/length |
 | `ascii-digits`, `utf-8` | Explicit text encoding |
 | `ascii-text` | Nonempty ASCII bytes in `0x20` through `0x7e`, preserved exactly; no trimming or replacement |
@@ -229,15 +248,16 @@ on Linux and Windows with Python 3.10, 3.12 and 3.14.
 ## Independent releases and upgrades
 
 The library has its own version, tests, and release history in `CHANGELOG.md`.
-Version 0.2.0 adds strict PDU consumption and corrects byte-field and codec handling;
-review the migration notes before updating a consumer.
+Version 0.2.1 restores location and network field mappings. Version 0.2.0 added
+strict PDU consumption and corrected byte-field and codec handling; review the
+migration notes before updating a consumer.
 
 Build and validate a release independently of any application:
 
 ```console
 python -m pip install build
 python -m build
-python -m pip install --force-reinstall dist/etsi_asn1_decoder-0.2.0-py3-none-any.whl
+python -m pip install --force-reinstall dist/etsi_asn1_decoder-0.2.1-py3-none-any.whl
 python -m unittest discover -s tests -v
 ```
 
