@@ -128,7 +128,9 @@ class FieldFormatTests(unittest.TestCase):
                     self.assertEqual(result[0], fmt)
                     self.assertEqual(result[1]["number"], "12345")
             record = {name: ("dSS1-Format", b"\x81\x31\x32")}
-            self.assertEqual(self.decoder.make_json_safe(record)[name][1], "hex:813132")
+            self.assertEqual(self.decoder.make_json_safe(record)[name][1]['number'], '12')
+            record = {name: ('unrecognized-Format', b'\x81\x31\x32')}
+            self.assertEqual(self.decoder.make_json_safe(record)[name][1], 'hex:813132')
 
     def test_builtin_scope_does_not_match_similar_fields(self):
         wire = bytes.fromhex("19325476981032f4")

@@ -11,7 +11,19 @@ import orjson
 import re
 from .sms import decode_tpdu, decode_gsm7, reassemble_sms
 from .field_formats import builtin_field_format
+from .eps import BYTE_FORMAT_DECODERS, decode_uli
+from .circuit import (BYTE_FORMAT_DECODERS as CIRCUIT_FORMATS,
+                      decode_isup_parameter, decode_location_number)
+from .location import BYTE_FORMAT_DECODERS as LOCATION_FORMATS
+from .packet import BYTE_FORMAT_DECODERS as PACKET_FORMATS
 from collections.abc import Mapping
+
+SUPPORTED_FIELD_FORMATS = frozenset({
+    'tbcd-digits', 'imsi-tbcd', 'imei-tbcd', 'map-address', 'isup-called', 'isup-calling',
+    'ascii-digits', 'ascii-text', 'utf-8', 'map-global-cell-id', 'ip-address', 'gtpv2-uli',
+    'ipv4', 'ipv6', 'uuid', 'uint-be', 'hex', 'isup-parameter', 'isup-location',
+    *BYTE_FORMAT_DECODERS, *CIRCUIT_FORMATS, *LOCATION_FORMATS, *PACKET_FORMATS,
+})
 
 
 class ASN1Decoder:
@@ -23,11 +35,8 @@ class ASN1Decoder:
             raise ValueError("use_builtin_formats must be a boolean")
         self.field_formats = dict(field_formats or {})
         self.use_builtin_formats = use_builtin_formats
-        supported = {"tbcd-digits", "imsi-tbcd", "imei-tbcd", "map-address",
-                     "isup-called", "isup-calling", "ascii-digits", "ascii-text", "utf-8",
-                     "map-global-cell-id", "ipv4", "ipv6", "uuid", "uint-be", "hex"}
         for path, fmt in self.field_formats.items():
-            if not isinstance(path, str) or not isinstance(fmt, str) or fmt not in supported:
+            if not isinstance(path, str) or not isinstance(fmt, str) or fmt not in SUPPORTED_FIELD_FORMATS:
                 raise ValueError(f"Invalid field format mapping: {path!r}: {fmt!r}")
         self.asn_dir = asn_dir
         self._specs = {}
@@ -416,11 +425,19 @@ class ASN1Decoder:
         fmt = self._field_format(context)
         if fmt is not None:
             decoders = {
+                **BYTE_FORMAT_DECODERS,
+                **CIRCUIT_FORMATS,
+                **LOCATION_FORMATS,
+                **PACKET_FORMATS,
+                'isup-parameter': lambda value: decode_isup_parameter(value, self.decode_isup_number),
+                'isup-location': lambda value: decode_location_number(value, self.decode_isup_number),
                 "tbcd-digits": self.decode_bcd_phone_number,
                 "imsi-tbcd": self.decode_imsi,
                 "imei-tbcd": self.decode_imei,
                 "map-address": self.decode_map_format_number,
                 "map-global-cell-id": self.decode_global_cell_id,
+                "ip-address": self.decode_ip_address,
+                "gtpv2-uli": lambda value: decode_uli(value, self.decode_plmn),
                 "isup-called": self.decode_isup_number,
                 "isup-calling": lambda value: self.decode_isup_number(value, calling=True),
                 "ipv4": lambda value: self.decode_ip_address(value) if len(value) == 4 else None,
@@ -552,7 +569,19 @@ class ASN1Decoder:
 
 
         if isinstance(obj, dict):
-            return {k: self.make_json_safe(v, spec=spec, asn_try_nested=asn_try_nested, nested_types=nested_types, context_path=f"{context_path}.{k}" if context_path else k) for k, v in obj.items()}
+            result = {k: self.make_json_safe(v, spec=spec, asn_try_nested=asn_try_nested, nested_types=nested_types, context_path=f"{context_path}.{k}" if context_path else k) for k, v in obj.items()}
+            # Check the declared IP family when the enclosing ASN.1 IPAddress
+            # structure is available. Exact profile overrides remain authoritative.
+            choice = obj.get('iP-value')
+            value_path = f"{context_path}.iP-value.iPBinaryAddress" if context_path else 'iP-value.iPBinaryAddress'
+            if (isinstance(choice, tuple) and len(choice) == 2 and choice[0] == 'iPBinaryAddress'
+                    and isinstance(choice[1], (bytes, bytearray))
+                    and self._field_format(value_path) == 'ip-address' and 'iP-type' in obj):
+                declared = obj['iP-type']
+                expected = {'iPV4': 4, 'iPV6': 16}.get(declared) if isinstance(declared, str) else None
+                if expected != len(choice[1]):
+                    result['iP-value'] = ['iPBinaryAddress', 'hex:' + choice[1].hex()]
+            return result
         if isinstance(obj, tuple) and len(obj) == 2 and isinstance(obj[0], str):
             # asn1tools CHOICE: retain the alternative name in the field path.
             name, value = obj

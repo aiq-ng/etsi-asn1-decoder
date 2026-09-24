@@ -1,6 +1,11 @@
 # ETSI ASN1 Decoder
 
-ASN.1 BER/DER decoder with explicit ETSI field formats and SMS TPDU support.
+ASN.1 BER/DER decoder with explicit ETSI field formats, CS/DSS1/ISUP parameters,
+EPS/GTPv2/NAS values, location formats, and SMS TPDU support.
+
+See [field coverage](docs/field-coverage.md) for supported wire layouts, remaining
+gaps, and an audit command for your own ASN.1 schemas. Mapping a field does not
+mean that every protocol extension inside it can be interpreted.
 
 ## Decode contract
 
@@ -42,7 +47,7 @@ their bytes happen to be printable ASCII. ASN.1 string values remain strings.
 An invalid value for the selected format stays hex; another decoder is never
 tried. SMS content retains its dedicated TPDU decoding described below.
 
-The initial registry follows **ETSI TS 101 671 V3.14.1, annex D**, covering:
+The identity portion of the registry follows **ETSI TS 101 671 V3.14.1, annex D**:
 
 | Exact parent/field or CHOICE path | Built-in format |
 | --- | --- |
@@ -62,9 +67,9 @@ The initial registry follows **ETSI TS 101 671 V3.14.1, annex D**, covering:
 
 Built-ins match these complete, case-sensitive trailing path components under
 any enclosing record. List indices do not affect built-in matching. A bare
-`imsi`, an unrelated `other.imsi`, or an unsupported `dSS1-Format` remains hex.
+`imsi`, an unrelated `other.imsi`, or an unrelated `other.dSS1-Format` remains hex.
 This registry implements known definitions; it does not infer semantics from
-arbitrary ASN.1 files. The initial registry is not exhaustive across ETSI profiles.
+arbitrary ASN.1 files. The registry is not exhaustive across ETSI profiles.
 
 `globalCellID` produces `MCC`, `MNC`, `LAC`, and (when present) `CellID`, plus
 the complete `raw_hex`. MCC/MNC remain digit strings with leading zeroes;
@@ -132,6 +137,19 @@ Supported formats:
 | `ascii-text` | Nonempty ASCII bytes in `0x20` through `0x7e`, preserved exactly; no trimming or replacement |
 | `ipv4`, `ipv6`, `uuid`, `uint-be` | Explicit binary representation (`uint-be`: unsigned, 1–8 octets) |
 | `hex` | Preserve original bytes |
+| `ip-address` | Four- or sixteen-octet binary IP address; checks declared `iP-type` when available |
+| `gtpv2-apn` | APN DNS labels or dotted ASCII, with the detected encoding named |
+| `apn-dns-labels`, `apn-text` | Require one specific APN encoding |
+| `gtpv2-ambr` | Eight-octet APN-AMBR; unsigned uplink/downlink rates in kbps |
+| `gtpv2-ebi`, `gtpv2-rat` | EPS bearer ID or known RAT code |
+| `gtpv2-bearer-qos` | ARP, QCI, and four unsigned 40-bit rates in kbps |
+| `gtpv2-paa` | PDN type and IPv4/IPv6 address allocation |
+| `gtpv2-uli` | CGI, SAI, RAI, TAI, ECGI, LAI, macro-eNodeB and extended macro-eNodeB |
+| `pco-ue-to-network`, `pco-network-to-ue` | PCO framing and supported direction-specific contents |
+
+Additional CS, location, NAS and traffic-filter formats are listed in the
+[coverage reference](docs/field-coverage.md). The complete accepted format set
+is available as `etsi_asn1_decoder.decoder.SUPPORTED_FIELD_FORMATS`.
 
 E.164 is a numbering plan, not a unique wire encoding. MAP AddressString and
 ISUP party-number contents must not share a decoder. The TBCD identity formats
@@ -143,6 +161,98 @@ unrecognized profiles can add explicit overrides.
 Generic nested ASN.1 probing is also restricted to CC payload contexts or
 explicit `nested_types`, so identity bytes cannot accidentally match an unrelated
 ASN.1 type. Configured field formats take precedence over that probing.
+
+## EPS and GTPv2 fields
+
+The following exact trailing paths also decode automatically. GTPv2 byte formats
+expect IE **values**, excluding the type, length, and instance header. PCO begins
+at its configuration-protocol octet (octet 3 in TS 24.008).
+
+| Exact parent/field or CHOICE path | Built-in format |
+| --- | --- |
+| `ePSCorrelationNumber` | `utf-8` |
+| `iP-value.iPBinaryAddress` | `ip-address` |
+| `ePS-GTPV2-specificParameters.aPN` | `gtpv2-apn` |
+| `ePS-GTPV2-specificParameters.aPN-AMBR` | `gtpv2-ambr` |
+| `ePS-GTPV2-specificParameters.ePSBearerIdentity`, `ePS-GTPV2-specificParameters.linkedEPSBearerId` | `gtpv2-ebi` |
+| `ePS-GTPV2-specificParameters.rATType` | `gtpv2-rat` |
+| `ePS-GTPV2-specificParameters.ePSBearerQoS` | `gtpv2-bearer-qos` |
+| `ePS-GTPV2-specificParameters.pDNAddressAllocation` | `gtpv2-paa` |
+| `ePSlocationOfTheTarget.userLocationInfo`, `ePSlocationOfTheTarget.olduserLocationInfo` | `gtpv2-uli` |
+| `protConfigOptions.ueToNetwork` | `pco-ue-to-network` |
+| `protConfigOptions.networkToUe` | `pco-network-to-ue` |
+
+`ePSCorrelationNumber` uses strict UTF-8 when valid and otherwise stays hex.
+For example, ASCII bytes for `session-1` become `"session-1"`, whereas
+`7974863829dc4381` remains `"hex:7974863829dc4381"`. Valid UTF-8 is preserved
+exactly, including empty strings and control characters; there is no trimming,
+replacement, or numeric conversion. This is a presentation policy for an opaque
+identifier, not a guarantee that a sender uses text. Select `hex` explicitly if
+your consumer requires stable hexadecimal keys for every correlation value.
+
+Compound results retain the complete `raw_hex`. APNs return `name` and `encoding`:
+standard length-prefixed labels produce `dns-labels`, while compatible dotted
+ASCII values produce `dotted-ascii`. Use an explicit `apn-dns-labels` or `apn-text`
+override to require a single encoding. Unrelated fields do not gain generic text
+guessing. Malformed or unsupported values retain hex without partial consumption.
+
+Bearer QoS returns QCI, priority, raw numeric pre-emption bits, and maximum and
+guaranteed uplink/downlink rates. APN-AMBR and QoS rates are in **kbps**. ULI returns
+each flagged location independently; MCC/MNC and numeric location codes are strings.
+Macro-eNodeB and extended macro-eNodeB variants include the declared ID width.
+PAA supports IPv4, IPv6, dual stack, Non-IP, and Ethernet; the IPv6 form requires
+the specified /64 prefix length. Unknown RAT codes stay hex.
+
+PCO retains entry order, duplicate IDs, lengths, and raw contents. Supported
+interpretations include PAP, IPCP address/DNS/NBNS options, P-CSCF/DNS address
+containers, IPv4 MTU, and bearer control. Request and response meanings depend
+on the configured direction. PAP credential/message bytes remain raw; unsupported
+protocols and containers carry `unsupported: true` with their bytes intact.
+Malformed supported contents carry `decode_error` without erasing later entries.
+Malformed outer framing leaves the entire PCO value as hex. This is not a decoder
+for every protocol that PCO can carry.
+
+Wire references: [TS 29.274 V17.10.0, clauses 8.6-8.21](https://www.etsi.org/deliver/etsi_ts/129200_129299/129274/17.10.00_60/ts_129274v171000p.pdf),
+[TS 24.008 V17.9.0, clause 10.5.6.3](https://www.etsi.org/deliver/etsi_ts/124000_124099/124008/17.09.00_60/ts_124008v170900p.pdf),
+[RFC 1334](https://www.rfc-editor.org/rfc/rfc1334.html),
+[RFC 1332](https://www.rfc-editor.org/rfc/rfc1332.html), and
+[RFC 1877](https://www.rfc-editor.org/rfc/rfc1877.html).
+
+## CS, location and schema coverage
+
+CS `services-Information` and `standard-Supplementary-Services` mappings now
+dispatch ISUP parameter TLVs and DSS1 information elements. For example:
+
+- `020103`: transmission medium requirement, **3.1 kHz audio**.
+- `34029181`: teleservice information, **telephony**.
+- `04038090a3`: bearer capability, **speech, 64 kbps, G.711 A-law**.
+
+Results retain parameter identifiers, lengths and complete `raw_hex`. Unknown
+parameters or codesets carry `unsupported: true`; malformed known inner values
+carry `decode_error`. Invalid outer framing stays hex. Neither case tries an
+unrelated ASN.1 root. This is parameter decoding, not a complete ISUP/MAP stack.
+
+Location support includes PLMN/LAI/RAI/SAI/TAI/ECGI, classic GAD shapes, CSG IDs,
+and EPS TAI lists. CS SGs `tAI`/`eCGI` retain their length octet; bare EPS values
+use separate formats. Explicit `ncgi` and `5gs-tai` formats accept their distinct
+layouts without claiming complete 5G HI2 support.
+
+Audit a schema without needing intercepted data:
+
+```sh
+etsi-asn1-coverage schemas/Example.asn --root Example:Record > coverage.json
+# Equivalent module invocation:
+python -m etsi_asn1_decoder.coverage schemas/Example.asn --root Example:Record
+```
+
+Use `--root` repeatedly for multiple module-qualified roots. The report follows
+imports, aliases, choices and list members, distinguishing mapped byte fields,
+opaque fields, unresolved types, recursion and traversal limits. Lists use a
+representative `[0]` index; per-index overrides may differ in real records.
+`--field-formats` and `--no-builtin-formats` mirror the decoder's profile options.
+The API `audit_schema(asn1tools.parse_files(paths), [(module, root)])` also accepts
+caller-normalized parse trees. Remote-operation macros unsupported by asn1tools
+must be normalized by the caller; the audit never rewrites source schemas.
 
 ## SMS decoding
 
@@ -248,16 +358,17 @@ on Linux and Windows with Python 3.10, 3.12 and 3.14.
 ## Independent releases and upgrades
 
 The library has its own version, tests, and release history in `CHANGELOG.md`.
-Version 0.2.1 restores location and network field mappings. Version 0.2.0 added
-strict PDU consumption and corrected byte-field and codec handling; review the
-migration notes before updating a consumer.
+Version 0.3.0 adds structured EPS/GTPv2 values and UTF-8 correlation presentation.
+Version 0.2.1 restored location and network field mappings. Version 0.2.0 added
+strict PDU consumption and corrected byte-field and codec handling. Review the
+migration notes and changed output shapes before updating a consumer.
 
 Build and validate a release independently of any application:
 
 ```console
 python -m pip install build
 python -m build
-python -m pip install --force-reinstall dist/etsi_asn1_decoder-0.2.1-py3-none-any.whl
+python -m pip install --force-reinstall dist/etsi_asn1_decoder-0.3.0-py3-none-any.whl
 python -m unittest discover -s tests -v
 ```
 
@@ -269,13 +380,12 @@ without `@<commit>` follows a moving branch and is not a version pin. Upgrade an
 restart the consuming Python process after installing; an already imported module
 does not change in a running service. CI validates builds without publishing them.
 
-When migrating from releases with generic printable-byte guessing, review opaque
-fields as well as identifiers. For example, `ePSCorrelationNumber` has no built-in
-text conversion: even printable octets remain `hex:...`. If your sender's profile
-explicitly defines ASCII here, opt in with an exact override such as
-`{"iRI-Report-record.ePSCorrelationNumber": "ascii-text"}` (supply each actual
-CHOICE path you use). Do not treat arbitrary correlation bytes as universally
-textual. Compare consumer keys and saved output expectations before deployment.
+Version 0.3.0 changes supported EPS fields from hex strings to structured values.
+It also changes valid UTF-8 `ePSCorrelationNumber` values from hex to exact text;
+invalid UTF-8 remains hex. Consumers of 0.2.x must review correlation keys and
+saved output expectations. For an opaque-only profile, use an exact override such
+as `{"iRI-Report-record.ePSCorrelationNumber": "hex"}` (supply each actual CHOICE
+path you use), or disable built-ins. Unknown byte fields continue to stay hex.
 
 Protocol references: [3GPP TS 23.040](https://www.etsi.org/deliver/etsi_ts/123000_123099/123040/11.05.00_60/ts_123040v110500p.pdf)
 and [3GPP TS 23.038](https://www.etsi.org/deliver/etsi_ts/123000_123099/123038/16.00.00_60/ts_123038v160000p.pdf).

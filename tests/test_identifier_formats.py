@@ -87,14 +87,17 @@ class IdentifierFormatTests(unittest.TestCase):
                          {"lawfulInterceptionIdentifier": "hex:54455354", "custom": "vendor ID"})
         self.assertEqual(decoder.smart_decode_hex(b"123", "partyIdentity.imsi"), "hex:313233")
 
-    def test_opaque_correlation_bytes_need_an_explicit_text_profile(self):
+    def test_correlation_uses_strict_utf8_with_hex_fallback_and_overrides(self):
         path = "iRI-Report-record.ePSCorrelationNumber"
         wire = b"session-1"
-        self.assertEqual(self.decoder.smart_decode_hex(wire, path), "hex:" + wire.hex())
-        self.decoder.field_formats[path] = "ascii-text"
         self.assertEqual(self.decoder.smart_decode_hex(wire, path), "session-1")
-        binary = b"\x00\xff\x01\x02"
-        self.assertEqual(self.decoder.smart_decode_hex(binary, path), "hex:" + binary.hex())
+        for text in ('café', '会話-001', '', '\x00ID'):
+            encoded = text.encode('utf-8')
+            self.assertEqual(self.decoder.smart_decode_hex(encoded, path), text)
+        for binary in (b"\x00\xff\x01\x02", bytes.fromhex('7974863829dc4381'), b'\xc0\xaf', b'\xed\xa0\x80'):
+            self.assertEqual(self.decoder.smart_decode_hex(binary, path), "hex:" + binary.hex())
+        self.decoder.field_formats[path] = 'hex'
+        self.assertEqual(self.decoder.smart_decode_hex(wire, path), "hex:" + wire.hex())
 
     def test_invalid_profiles_fail_before_compiling(self):
         with patch.object(ASN1Decoder, "compile_asn1_from_dir") as compile_schema:

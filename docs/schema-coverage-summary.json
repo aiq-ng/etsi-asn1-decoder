@@ -1,0 +1,211 @@
+{
+  "registry_entries": 105,
+  "supported_formats": 65,
+  "method": "asn1tools parser after caller ROS/payload normalization; byte paths only, lists use [0]",
+  "note": "Mapped means a dispatcher exists, not complete protocol support or a runtime success rate.",
+  "bundles": [
+    {
+      "bundle": "Ericsson_LI",
+      "sources": [
+        {
+          "file": "HI2Operations.asn",
+          "sha256": "fd57f1e2f2c64b4098d0e4499f47a584d1eb7fcb912150ee6b2dd271245af405"
+        },
+        {
+          "file": "SecurityDomain.asn",
+          "sha256": "bcb2479b2d6cfb0a12240e85df6d88d43ca8db7ef7b34c865acc90bc20bd9856"
+        },
+        {
+          "file": "UmtsCS-HI2Operations.asn",
+          "sha256": "3f3d58056eb7c938f55ec33cf7e31fd5891762d250ba8d9f99ca45f5e5e69536"
+        }
+      ],
+      "roots": [
+        "HI2Operations:IRIContent",
+        "UmtsCS-HI2Operations:UmtsCS-IRIContent"
+      ],
+      "summary": {
+        "mapped": 308,
+        "opaque": 52
+      },
+      "opaque_leaf_names": [
+        "cC-Link-Identifier",
+        "iP-Format",
+        "intercept-identifier",
+        "out-of-band-signal-received",
+        "sciData"
+      ]
+    },
+    {
+      "bundle": "Utimaco_LI",
+      "sources": [
+        {
+          "file": "06132v203_C01.asn",
+          "sha256": "9082dbca68e86d76e1d23a64ccf82950055cbb8666a87411921df5f5bd84480b"
+        },
+        {
+          "file": "CONF-HI3-IMS.asn",
+          "sha256": "480cb12de488c51d0cf2693d47514c0bb7a93e743b6550ffcc93777d3ea23d18"
+        },
+        {
+          "file": "CONFHI2Operations.asn",
+          "sha256": "74e44120844a3d3288889dac17d9e57864105a64a9a33feb8740978ba148ed34"
+        },
+        {
+          "file": "Eps-HI3-PS.asn",
+          "sha256": "645d90d2f439132f55d4101c6d3d4304360459c1c05dda25931336df2640819d"
+        },
+        {
+          "file": "EpsHI2Operations.asn",
+          "sha256": "ca417bc4e8493322c6fd1f78186ec067a6a4d06ac441d58f240422bec411c199"
+        },
+        {
+          "file": "GCSE-HI3.asn",
+          "sha256": "1c384163fe8cf5db7bfa8916392536fdbee467742ab4080028cdbe018ac9fbba"
+        },
+        {
+          "file": "GCSEHI2Operations.asn",
+          "sha256": "8b8ce4d0402b92416fc6c0b6a08a347978985c894010aa830ba8954770b8f2c9"
+        },
+        {
+          "file": "HI1NotificationOperations.asn",
+          "sha256": "71be7cf1d386a90eb573dff613a9026cd95766fdcd738e186d0de8324fe2daec"
+        },
+        {
+          "file": "HI2Operations.asn",
+          "sha256": "9d2c95cae53b5d6ba5b83465bba7960555c546939393f119fb58c4ef6aef7b6d"
+        },
+        {
+          "file": "HI3CCLinkData.asn",
+          "sha256": "027bf1f389da205a24895521320cd80da958ba41c21ecbf8bd3284cda0da141b"
+        },
+        {
+          "file": "IWLANUmtsHI2Operations.asn",
+          "sha256": "70c57a1c1880265cddbe58440ec88dfe0fb2fa74911124e16b199e935fa70889"
+        },
+        {
+          "file": "MBMSUmtsHI2Operations.asn",
+          "sha256": "fa75dbce9bfb8426725e283eee050b1b9df03750f9cfdf6ef6b3be9417b53fe7"
+        },
+        {
+          "file": "PCESP.asn",
+          "sha256": "cc3a1505d460f2459000aed88ed023fe19a02f7be48dcfe4399b67103b0a4e86"
+        },
+        {
+          "file": "ProSeHI2Operations.asn",
+          "sha256": "be7ad9687e1ec8a2213010b84841cf175c8d6ac9c9dea6aec515d097dd19a3f3"
+        },
+        {
+          "file": "ThreeGPP-HI1NotificationOperations.asn",
+          "sha256": "2b5ad8928928d164280937b2a2b2f7e5ce6b4c13f27534ff4f6f083cd22ef410"
+        },
+        {
+          "file": "TS101909201.asn",
+          "sha256": "21cc720e1c2e5568e412efcca979b4967c6990ff37c19e971b6573910a2108d3"
+        },
+        {
+          "file": "Umts-HI3-PS.asn",
+          "sha256": "b98c31c37a05f845d2ad49a66996dd4f0e5da06b221eafa34815adbfce0a1b69"
+        },
+        {
+          "file": "UMTS-HI3CircuitLIOperations.asn",
+          "sha256": "9ac15b00da918e568e414fed53da1e706f89c59f673ffcd6e3e776e7e5e1e9d6"
+        },
+        {
+          "file": "UMTS-HIManagementOperations.asn",
+          "sha256": "6888acebd5bf0c0b572015b186afffe8b2f670fff303ac5bd45590536cd605c2"
+        },
+        {
+          "file": "UmtsCS-HI2Operations.asn",
+          "sha256": "d55489bbb86454802c2d47e59ffadfb6ee609f30cc33c37b3057900b6d3bbf90"
+        },
+        {
+          "file": "UmtsHI2Operations.asn",
+          "sha256": "bba391704d4e93d2cc9d38ef6e4d8a3266633d7525ff3004924e719e579d344e"
+        },
+        {
+          "file": "VoIP-HI3-IMS.asn",
+          "sha256": "02fbc1d3da0842b2ceecde9e0ebd44a5714d84337d0a9e023a08fdeb84e56e06"
+        }
+      ],
+      "roots": [
+        "EpsHI2Operations:EpsIRIContent",
+        "HI2Operations:IRIContent",
+        "UmtsCS-HI2Operations:UmtsCS-IRIContent",
+        "UmtsHI2Operations:UmtsIRIContent"
+      ],
+      "summary": {
+        "mapped": 1660,
+        "opaque": 1148
+      },
+      "opaque_leaf_names": [
+        "aPN",
+        "accessTechnologyType",
+        "cC-Link-Identifier",
+        "cCCSID",
+        "cCDecKey",
+        "cCSalt",
+        "cI",
+        "cPlaneData",
+        "cc[0]",
+        "copySignal",
+        "cryptoCheckSum",
+        "dHCPv4AddressAllocationInd",
+        "dNS-Format",
+        "dSS1-SS-Invoke-components[0]",
+        "extendedHandoverIndication",
+        "gPRSCorrelationNumber",
+        "gPRSOperationErrorCode",
+        "geodeticData",
+        "hSS-AAA-address",
+        "handoverIndication",
+        "heNBIdentity",
+        "headerCopy",
+        "homeAddress",
+        "iP-Format",
+        "iP4address",
+        "iP6address",
+        "iPv4careOfAddress",
+        "iPv6HomeNetworkPrefix",
+        "ims-iri",
+        "iri",
+        "iri-IRI",
+        "iri-to-iri",
+        "lai",
+        "mAP-SS-Invoke-Components[0]",
+        "mAP-SS-Parameters[0]",
+        "mAP-parameters[0]",
+        "mcc",
+        "mnc",
+        "national-Parameters[0]",
+        "other-Services[0]",
+        "proprietary-92",
+        "protConfigurationOption",
+        "qosGn",
+        "qosMobileRadio",
+        "requestedIPv6HomePrefix",
+        "rfc2868ValueField",
+        "sIPMessage",
+        "sciData",
+        "servingNodeAddress",
+        "servingSGSN-address",
+        "servingSGSN-number",
+        "ssi",
+        "tEI",
+        "tLIInstanceid",
+        "targetPDN-GW-Address",
+        "tei",
+        "threeGPP2Bsid",
+        "trafficPacket",
+        "uLITimestamp",
+        "unknown",
+        "v81-identifier",
+        "v82-identifier",
+        "v83-identifier",
+        "x25-Format",
+        "x25Address",
+        "xCAPmessage"
+      ]
+    }
+  ]
+}
