@@ -2,6 +2,82 @@
 
 Smart ASN.1 DER Decoder for ETSI Specs
 
+## Field-specific byte formats
+
+Known ETSI phone and identity fields decode automatically using the built-in
+field/format registry. No manual configuration is needed for these fields.
+There are no byte-length, substring, or generic phone-number guesses.
+Unmapped OCTET STRING values remain `hex:...`, even when
+their bytes happen to be printable ASCII. ASN.1 string values remain strings.
+An invalid value for the selected format stays hex; another decoder is never
+tried. SMS content retains its dedicated TPDU decoding described below.
+
+The initial registry follows **ETSI TS 101 671 V3.14.1, annex D**, covering:
+
+| Exact parent/field or CHOICE path | Built-in format |
+| --- | --- |
+| `partyIdentity.imsi` | `imsi-tbcd` |
+| `partyIdentity.imei` | `imei-tbcd` |
+| `partyIdentity.msISDN` | `map-address` |
+| `partyIdentity.e164-Format` | `isup-calling` |
+| `partyIdentity.sip-uri`, `partyIdentity.tel-url` | `utf-8` |
+| `callingPartyNumber.iSUP-Format` | `isup-calling` |
+| `calledPartyNumber.iSUP-Format` | `isup-called` |
+| `callingPartyNumber.mAP-Format`, `calledPartyNumber.mAP-Format` | `map-address` |
+
+Built-ins match these complete, case-sensitive trailing path components under
+any enclosing record. List indices do not affect built-in matching. A bare
+`imsi`, an unrelated `other.imsi`, or an unsupported `dSS1-Format` remains hex.
+This registry implements known definitions; it does not infer semantics from
+arbitrary ASN.1 files. The initial registry is not exhaustive across ETSI profiles.
+
+Reference: [ETSI TS 101 671, annex D, PartyInformation and party-number choices](https://www.etsi.org/deliver/etsi_ts/101600_101699/101671/03.14.01_60/ts_101671v031401p.pdf).
+
+For custom fields or profiles, optionally supply exact full-path overrides:
+
+```python
+decoder = ASN1Decoder(asn_dir, field_formats={
+    "identity.imsi": "imsi-tbcd",
+    "party.msisdn": "map-address",
+    "party.calledPartyNumber": "isup-called",
+    "equipment.imei": "imei-tbcd",
+    "label": "utf-8",
+})
+```
+
+These override paths are examples. Overrides take precedence over built-ins;
+use `"hex"` to disable decoding for a particular field. Paths are case-sensitive,
+start at the decoded root's fields, and must match completely. CHOICE alternative
+names are included (e.g. `identity.imsi`); list indices are included as `[0]`,
+`[1]`, etc. The CHOICE JSON representation remains `[name, value]`.
+
+For the CLI, put the same mapping in a JSON object and pass
+`--field-formats field-formats.json`.
+
+Supported formats:
+
+| Format | Interpretation |
+| --- | --- |
+| `imsi-tbcd` | MAP IMSI decimal TBCD; preserves every identity digit |
+| `imei-tbcd` | 15-digit IMEI in decimal TBCD |
+| `tbcd-digits` | Decimal TBCD, final high-nibble `F` filler only |
+| `map-address` | MAP AddressString, one TON/NPI octet then decimal TBCD |
+| `isup-called`, `isup-calling` | Q.763 parameter contents, two header octets then decimal digits; excludes parameter tag/length |
+| `ascii-digits`, `utf-8` | Explicit text encoding |
+| `ipv4`, `ipv6`, `uuid`, `uint-be` | Explicit binary representation (`uint-be`: unsigned, 1–8 octets) |
+| `hex` | Preserve original bytes |
+
+E.164 is a numbering plan, not a unique wire encoding. MAP AddressString and
+ISUP party-number contents must not share a decoder. The TBCD identity formats
+above do not accept NAS mobile-identity headers. Unsupported encodings and
+non-decimal dialling symbols should remain hex until a suitable format decoder
+is provided. Only the documented parent/field combinations have defaults;
+unrecognized profiles can add explicit overrides.
+
+Generic nested ASN.1 probing is also restricted to CC payload contexts or
+explicit `nested_types`, so identity bytes cannot accidentally match an unrelated
+ASN.1 type. Configured field formats take precedence over that probing.
+
 ## SMS decoding
 
 SMS content fields are decoded as **bare TPDUs**. Strip any modem SMSC prefix

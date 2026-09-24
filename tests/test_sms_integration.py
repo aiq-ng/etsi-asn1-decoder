@@ -64,8 +64,8 @@ class SMSIntegrationTests(unittest.TestCase):
         self.assertIsNone(self.decoder.decode_gsm7bit(HELLO[:-1], 5))
         self.assertEqual(self.decoder.reassemble_sms([segment(2, b"B"), segment(1, b"A")])["message"], "AB")
 
-    def test_non_sms_decoding_is_unchanged(self):
-        self.assertEqual(self.decoder.make_json_safe(b"hello", context_path="name"), "hello")
+    def test_unmapped_octets_remain_hex(self):
+        self.assertEqual(self.decoder.make_json_safe(b"hello", context_path="name"), "hex:68656c6c6f")
         self.assertEqual(self.decoder.decode_bcd_phone_number(bytes.fromhex("2143f5")), "12345")
 
 

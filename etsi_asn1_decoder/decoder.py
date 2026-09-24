@@ -10,110 +10,87 @@ from typing import Any, Optional, Tuple
 import orjson
 import re
 from .sms import decode_tpdu, decode_gsm7, reassemble_sms
+from .field_formats import builtin_field_format
 
 
 class ASN1Decoder:   
-    def __init__(self, asn_dir: str):
+    def __init__(self, asn_dir: str, field_formats: Optional[dict] = None):
+        self.field_formats = dict(field_formats or {})
+        supported = {"tbcd-digits", "imsi-tbcd", "imei-tbcd", "map-address",
+                     "isup-called", "isup-calling", "ascii-digits", "utf-8",
+                     "ipv4", "ipv6", "uuid", "uint-be", "hex"}
+        for path, fmt in self.field_formats.items():
+            if not isinstance(path, str) or fmt not in supported:
+                raise ValueError(f"Invalid field format mapping: {path!r}: {fmt!r}")
         self.spec = self.compile_asn1_from_dir(asn_dir)
 
     def decode_bcd_phone_number(self, data: bytes) -> Optional[str]:
-        """
-        Decode BCD-encoded phone number (semi-octets).
-        Common in E.164 numbers, MSISDN, IMSI, etc.
-        Returns decoded string or None if invalid.
-        """
+        """Decode decimal TBCD only; F is allowed only as final high filler."""
         if not data:
             return None
-        
         digits = []
-        for byte in data:
-            low = byte & 0x0F
-            high = (byte >> 4) & 0x0F
-            
-            # 0xF is filler
-            if low <= 9:
-                digits.append(str(low))
-            elif low == 0xF:
-                pass  # filler, skip
-            else:
-                return None  # invalid BCD
-            
-            if high <= 9:
-                digits.append(str(high))
-            elif high == 0xF:
-                pass  # filler, skip
-            else:
-                return None  # invalid BCD
-        
-        return ''.join(digits) if digits else None
-
-    def decode_e164_format(self, data: bytes) -> Optional[dict]:
-        """
-        Decode E.164 formatted number (ISUP calling/called party number format).
-        First byte is typically nature of address indicator + numbering plan.
-        Remaining bytes are BCD encoded digits.
-        """
-        if len(data) < 2:
-            return None
-        
-        nature_and_plan = data[0]
-        bcd_data = data[1:]
-        
-        number = self.decode_bcd_phone_number(bcd_data)
-        if number:
-            return {
-                "number": number,
-                "nature_of_address": (nature_and_plan >> 4) & 0x0F,
-                "numbering_plan": nature_and_plan & 0x0F,
-                "raw_hex": data.hex()
-            }
-        return None
+        for i, byte in enumerate(data):
+            low, high = byte & 15, byte >> 4
+            if low > 9:
+                return None
+            digits.append(str(low))
+            if high == 15 and i == len(data) - 1:
+                continue
+            if high > 9:
+                return None
+            digits.append(str(high))
+        return ''.join(digits)
 
     def decode_map_format_number(self, data: bytes) -> Optional[dict]:
+        """Decode MAP AddressString: one TON/NPI octet followed by TBCD."""
+        if not 2 <= len(data) <= 20 or not data[0] & 0x80:
+            return None
+        number = self.decode_bcd_phone_number(data[1:])
+        if number is None:
+            return None
+        return {"number": number, "nature_of_address": (data[0] >> 4) & 7,
+                "numbering_plan": data[0] & 15, "raw_hex": data.hex()}
+
+    def decode_e164_format(self, data: bytes) -> Optional[dict]:
+        """Legacy alias for MAP AddressString, not an ISUP decoder.
+
+        E.164 specifies a numbering plan, not a unique octet encoding.
         """
-        Decode MAP AddressString format (3GPP TS 29.002).
-        First byte: nature of address + numbering plan.
-        Remaining bytes: BCD encoded digits.
-        """
-        return self.decode_e164_format(data)
+        return self.decode_map_format_number(data)
+
+    def decode_isup_number(self, data: bytes, calling: bool = False) -> Optional[dict]:
+        """Decode Q.763 parameter contents (without tag/length), decimal digits."""
+        if len(data) < 3:
+            return None
+        odd = bool(data[0] & 0x80)
+        digits = []
+        for byte in data[2:]:
+            digits.extend((byte & 15, byte >> 4))
+        if odd:
+            if digits.pop() != 0:
+                return None
+        if any(d > 9 for d in digits):
+            return None
+        result = {"number": ''.join(map(str, digits)),
+                  "nature_of_address": data[0] & 0x7F,
+                  "numbering_plan": (data[1] >> 4) & 7, "raw_hex": data.hex()}
+        if calling:
+            result.update(presentation=(data[1] >> 2) & 3, screening=data[1] & 3)
+        return result
 
     def decode_imsi(self, data: bytes) -> Optional[str]:
-        """
-        Decode IMSI (International Mobile Subscriber Identity).
-        Format: 3-8 octets, BCD encoded.
-        """
-        if not (3 <= len(data) <= 8):
+        """Decode MAP IMSI TBCD; no NAS mobile-identity header is present."""
+        if not 3 <= len(data) <= 8:
             return None
-        
-        # First byte has parity in bit 3 and identity type
-        # For IMSI, we typically skip first nibble if it's odd parity marker
-        first_byte = data[0]
-        identity_type = first_byte & 0x07
-        
-        # Decode remaining as BCD
-        imsi_digits = self.decode_bcd_phone_number(data)
-        
-        if imsi_digits and len(imsi_digits) >= 6:  # IMSI should be 14-15 digits
-            # Remove leading digit if it's parity/filler (often '1')
-            if imsi_digits[0] in ['1', '9']:
-                imsi_digits = imsi_digits[1:]
-            return f"{imsi_digits}"
-        
-        return None
+        digits = self.decode_bcd_phone_number(data)
+        return digits if digits is not None and 5 <= len(digits) <= 15 else None
 
     def decode_imei(self, data: bytes) -> Optional[str]:
-        """
-        Decode IMEI (International Mobile Equipment Identity).
-        Format: 8 octets, BCD encoded.
-        """
+        """Decode a 15-digit TBCD IMEI, without a mobile-identity header."""
         if len(data) != 8:
             return None
-        
-        imei = self.decode_bcd_phone_number(data)
-        if imei and len(imei) == 15:  # IMEI is 15 digits
-            return f"IMEI:{imei}"
-        
-        return None
+        digits = self.decode_bcd_phone_number(data)
+        return "IMEI:" + digits if digits is not None and len(digits) == 15 else None
 
     def decode_global_cell_id(self, data: bytes) -> Optional[dict]:
         """
@@ -415,177 +392,49 @@ class ASN1Decoder:
 
         return candidates
 
+    def _field_format(self, context: str) -> Optional[str]:
+        overrides = getattr(self, "field_formats", {})
+        if context in overrides:
+            return overrides[context]
+        return builtin_field_format(context)
+
     def smart_decode_hex(self, data: bytes, context: str = "") -> Any:
+        """Decode only the format assigned to this exact field path.
+
+        Explicit overrides precede known ETSI parent/field mappings.
+        Unmapped or invalid fields retain hex. A failed decoder never falls
+        through to another format. SMS content keeps its dedicated TPDU path.
         """
-        Attempt to intelligently decode hex data based on context and data patterns.
-        Returns decoded value or original hex string if unable to decode.
-        """
-        if not data:
-            return "hex:"
-        
-        # Track what we tried
-        attempts = {}
-        
-        # Context-based decoding
-        context_lower = context.lower()
-        
-        # SMS content
-        if "sms" in context_lower and "content" in context_lower:
+        raw = "hex:" + data.hex()
+        fmt = self._field_format(context)
+        if fmt is not None:
+            decoders = {
+                "tbcd-digits": self.decode_bcd_phone_number,
+                "imsi-tbcd": self.decode_imsi,
+                "imei-tbcd": self.decode_imei,
+                "map-address": self.decode_map_format_number,
+                "isup-called": self.decode_isup_number,
+                "isup-calling": lambda value: self.decode_isup_number(value, calling=True),
+                "ipv4": lambda value: self.decode_ip_address(value) if len(value) == 4 else None,
+                "ipv6": lambda value: self.decode_ip_address(value) if len(value) == 16 else None,
+                "uuid": self.decode_uuid_bytes,
+                "uint-be": self.decode_unsigned_identifier,
+                "hex": lambda value: None,
+                "utf-8": lambda value: value.decode("utf-8"),
+                "ascii-digits": lambda value: value.decode("ascii") if value and all(48 <= b <= 57 for b in value) else None,
+            }
+            if fmt not in decoders:
+                raise ValueError(f"Unknown field format: {fmt!r}")
+            try:
+                result = decoders[fmt](data)
+            except ValueError:
+                return raw
+            return result if result is not None else raw
+        fields = context.lower().split(".")
+        if fields[-1] == "content" and any(f in ("sms", "sms-contents") for f in fields[:-1]):
             result = self.decode_sms_pdu(data)
-            if result:
-                return {"decoded_sms": result}
-            # A failed SMS parse must not fall through to unrelated heuristics.
-            return "hex:" + data.hex()
-
-        # IMSI
-        if "imsi" in context_lower or (3 <= len(data) <= 8):
-            result = self.decode_imsi(data)
-            if result:
-                return result
-        
-        # IMEI
-        if "imei" in context_lower or len(data) == 8:
-            result = self.decode_imei(data)
-            if result:
-                return result
-        
-        # Global Cell ID
-        if "cell" in context_lower or "gcid" in context_lower or (5 <= len(data) <= 7):
-            result = self.decode_global_cell_id(data)
-            if result:
-                return result
-
-        # PLMN (MCC/MNC) identifiers
-        if any(kw in context_lower for kw in ["plmn", "mcc", "mnc"]):
-            result = self.decode_plmn(data)
-            if result:
-                return result
-
-        # IP addresses
-        ip_context = (
-            any(kw in context_lower for kw in [
-                "ipv4", "ipv6", "ipaddress", "ip-address", "ipaddr",
-                "ggsnaddress", "sgsnaddress", "mmeaddress", "mmeipaddress",
-                "pdnaddress", "data-node-address", "datanodeaddress", "ipvalue"
-            ])
-            or ("ip" in context_lower and any(marker in context_lower for marker in ["address", "addr", "endpoint", "node", "host"]))
-        )
-        if ip_context:
-            result = self.decode_ip_address(data)
-            if result:
-                return result
-
-        # Unix timestamps
-        time_keywords = ["timestamp", "time", "eventtime", "generationtime", "microsecond", "millisecond", "epoch"]
-        if any(kw in context_lower for kw in time_keywords):
-            result = self.decode_unix_timestamp(data)
-            if result:
-                return result
-
-        # UUID/GUID
-        uuid_keywords = ["uuid", "guid", "traceid", "sessionid", "transactionid", "correlationid"]
-        if any(kw in context_lower for kw in uuid_keywords):
-            result = self.decode_uuid_bytes(data)
-            if result:
-                return result
-
-        # Generic unsigned identifiers
-        id_keywords = [
-            "identifier",
-            "liid",
-            "counter",
-            "sequence",
-            "seq",
-            "reference",
-            "correlation",
-            "recordid",
-            "requestid",
-            "messageid",
-            "userid",
-            "index",
-            "offset"
-        ]
-        if any(kw in context_lower for kw in id_keywords):
-            result = self.decode_unsigned_identifier(data)
-            if result:
-                return result
-
-        # Communication Identifier / CIN heuristic
-        # cin_keywords = [
-        #     "cin",
-        #     "communicationidentifier",
-        #     "communication-identity-number",
-        #     "communicationidentitynumber",
-        #     "networkidentifier",
-        #     "network-identifier",
-        #     "internalcorrelation",
-        #     "internal-correlation",
-        #     "profilespecific",
-        #     "profile-specific"
-        # ]
-        # if any(kw in context_lower for kw in cin_keywords):
-        #     result = self.decode_communication_identifier_blob(data)
-        #     if result:
-        #         return result
-        
-        # Phone numbers (E.164 or MAP format)
-        if any(kw in context_lower for kw in ["number", "msisdn", "calling", "called", "address"]):
-            # Try MAP format first
-            result = self.decode_map_format_number(data)
-            if result:
-                return result
-            
-            # Try E164 format
-            result = self.decode_e164_format(data)
-            if result:
-                return result
-        
-        # Pattern-based detection when context is not clear
-        
-        # Check if it looks like a phone number (MAP/E164 format)
-        if len(data) >= 2:
-            result = self.decode_map_format_number(data)
-            if result and result.get("number") and len(result["number"]) >= 4:
-                return result
-        
-        # Check if it could be IMEI (8 bytes)
-        if len(data) == 8:
-            result = self.decode_imei(data)
-            if result:
-                return result
-        
-        # Check if it could be IMSI (3-8 bytes)
-        if 3 <= len(data) <= 8:
-            result = self.decode_imsi(data)
-            if result:
-                return result
-        
-        # Check if it could be Global Cell ID
-        if 5 <= len(data) <= 7:
-            result = self.decode_global_cell_id(data)
-            if result:
-                return result
-
-        # Heuristic PLMN decoding when data is 3 bytes of BCD digits
-        if len(data) == 3:
-            result = self.decode_plmn(data)
-            if result:
-                return result
-
-        # Check for UUIDs when data is 16 bytes and looks structured
-        if len(data) == 16 and data not in (b"\x00" * 16, b"\xff" * 16):
-            result = self.decode_uuid_bytes(data)
-            if result:
-                return result
-
-        # Timestamp heuristic without context if bytes look like sane epoch
-        if len(data) in (4, 8):
-            result = self.decode_unix_timestamp(data)
-            if result:
-                return result
-        
-        # Fallback: return as hex
-        return "hex:" + data.hex()
+            return {"decoded_sms": result} if result else raw
+        return raw
 
     def is_printable_ascii(self, b: bytes) -> bool:
         """Return True if bytes decode to UTF-8 and contain only printable characters and whitespace."""
@@ -652,8 +501,8 @@ class ASN1Decoder:
     def make_json_safe(self, obj: Any, spec=None, asn_try_nested=False, nested_types=None, context_path: str = "") -> Any:
         """
         Convert decoded ASN.1 object (from asn1tools) into JSON-safe representation.
-        - bytes/bytearray => check: printable string, or try nested ASN.1 decode (if spec/asn_try_nested True),
-        or try smart decoding based on context, else return hex:"..."
+        - bytes/bytearray => exact configured format, SMS TPDU, or hex:"..."
+        - nested ASN.1 probing requires a CC context or explicit nested_types
         - dict/list/tuple => recursively process
         - primitives => returned as-is
         
@@ -661,20 +510,14 @@ class ASN1Decoder:
         """
         if isinstance(obj, (bytes, bytearray)):
             b = bytes(obj)
-            # 1) printable UTF-8?
             context_lower = context_path.lower()
-            if "sms" in context_lower and "content" in context_lower:
+            fields = context_lower.split(".")
+            if (self._field_format(context_path) is not None
+                    or (fields[-1] == "content" and any(f in ("sms", "sms-contents") for f in fields[:-1]))):
                 return self.smart_decode_hex(b, context=context_path)
 
-            if self.is_printable_ascii(b):
-                try:
-                    return b.decode('utf-8')
-                except Exception:
-                    # fallback below
-                    pass
-
-            # 2) optionally, try to interpret the bytes as ASN.1 using the compiled spec
-            if asn_try_nested and spec is not None:
+            # Probe only designated nested payloads, never arbitrary identity bytes.
+            if asn_try_nested and spec is not None and (nested_types or self.is_cc_context(fields[-1])):
                 tname = None
                 decoded = None
 
@@ -704,6 +547,12 @@ class ASN1Decoder:
 
         if isinstance(obj, dict):
             return {k: self.make_json_safe(v, spec=spec, asn_try_nested=asn_try_nested, nested_types=nested_types, context_path=f"{context_path}.{k}" if context_path else k) for k, v in obj.items()}
+        if isinstance(obj, tuple) and len(obj) == 2 and isinstance(obj[0], str):
+            # asn1tools CHOICE: retain the alternative name in the field path.
+            name, value = obj
+            path = f"{context_path}.{name}" if context_path else name
+            return [name, self.make_json_safe(value, spec=spec, asn_try_nested=asn_try_nested,
+                    nested_types=nested_types, context_path=path)]
         if isinstance(obj, (list, tuple)):
             items = []
             for idx, v in enumerate(obj):
@@ -829,7 +678,7 @@ class ASN1Decoder:
                         hx.write(data.hex())
                     print(f"[i] Saved raw and hex: {raw_path}, {hex_path}")
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(description="Batch decode ASN.1 DER/BER files to JSON. Nested ASN.1 decoding of bytes is optional.")
     parser.add_argument("--asn", required=True, help="Directory containing ASN.1 files")
     parser.add_argument("--input", required=True, help="Directory with binary files to decode")
@@ -839,9 +688,20 @@ if __name__ == "__main__":
     parser.add_argument("--no-save-raw-on-fail", dest="save_raw", action="store_false", help="Don't save raw .bin/.hex when decode fails")
     parser.add_argument("--no-nested-asn", dest="asn_try_nested", action="store_false", help="Don't attempt nested ASN.1 decoding of bytes")
     parser.add_argument("--nested-types", default="", help="If provided, comma-separated type names to try when probing bytes (limits probing scope)")
+    parser.add_argument("--field-formats", help="JSON file mapping exact field paths to byte formats")
     args = parser.parse_args()
 
-    decoder = ASN1Decoder(args.asn)
+    field_formats = None
+    if args.field_formats:
+        with open(args.field_formats, encoding="utf-8") as source:
+            field_formats = json.load(source)
+        if not isinstance(field_formats, dict):
+            parser.error("--field-formats must contain a JSON object")
+    decoder = ASN1Decoder(args.asn, field_formats=field_formats)
 
     decoder.process_dir(args.input, args.output, args.roots, encoding=args.encoding,
                 save_raw_on_fail=args.save_raw, asn_try_nested=args.asn_try_nested, nested_types=args.nested_types)
+
+
+if __name__ == "__main__":
+    main()
