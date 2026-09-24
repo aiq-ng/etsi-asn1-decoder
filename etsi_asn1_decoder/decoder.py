@@ -11,18 +11,38 @@ import orjson
 import re
 from .sms import decode_tpdu, decode_gsm7, reassemble_sms
 from .field_formats import builtin_field_format
+from collections.abc import Mapping
 
 
-class ASN1Decoder:   
-    def __init__(self, asn_dir: str, field_formats: Optional[dict] = None):
+class ASN1Decoder:
+    def __init__(self, asn_dir: str, field_formats: Optional[dict] = None,
+                 *, encoding: Optional[str] = None, use_builtin_formats: bool = True):
+        if field_formats is not None and not isinstance(field_formats, Mapping):
+            raise ValueError("field_formats must be a mapping of exact paths to formats")
+        if not isinstance(use_builtin_formats, bool):
+            raise ValueError("use_builtin_formats must be a boolean")
         self.field_formats = dict(field_formats or {})
+        self.use_builtin_formats = use_builtin_formats
         supported = {"tbcd-digits", "imsi-tbcd", "imei-tbcd", "map-address",
-                     "isup-called", "isup-calling", "ascii-digits", "utf-8",
+                     "isup-called", "isup-calling", "ascii-digits", "ascii-text", "utf-8",
                      "ipv4", "ipv6", "uuid", "uint-be", "hex"}
         for path, fmt in self.field_formats.items():
-            if not isinstance(path, str) or fmt not in supported:
+            if not isinstance(path, str) or not isinstance(fmt, str) or fmt not in supported:
                 raise ValueError(f"Invalid field format mapping: {path!r}: {fmt!r}")
-        self.spec = self.compile_asn1_from_dir(asn_dir)
+        self.asn_dir = asn_dir
+        self._specs = {}
+        # Preserve subclass compilation defaults when no codec was requested.
+        self.spec = (self.compile_asn1_from_dir(asn_dir) if encoding is None
+                     else self._spec_for_encoding(encoding))
+
+    def _spec_for_encoding(self, encoding):
+        if encoding is None:
+            return self.spec
+        if encoding not in ("ber", "der"):
+            raise ValueError("encoding must be 'ber' or 'der'")
+        if encoding not in self._specs:
+            self._specs[encoding] = self.compile_asn1_from_dir(self.asn_dir, encoding=encoding)
+        return self._specs[encoding]
 
     def decode_bcd_phone_number(self, data: bytes) -> Optional[str]:
         """Decode decimal TBCD only; F is allowed only as final high filler."""
@@ -396,7 +416,9 @@ class ASN1Decoder:
         overrides = getattr(self, "field_formats", {})
         if context in overrides:
             return overrides[context]
-        return builtin_field_format(context)
+        if getattr(self, "use_builtin_formats", True):
+            return builtin_field_format(context)
+        return None
 
     def smart_decode_hex(self, data: bytes, context: str = "") -> Any:
         """Decode only the format assigned to this exact field path.
@@ -421,6 +443,7 @@ class ASN1Decoder:
                 "uint-be": self.decode_unsigned_identifier,
                 "hex": lambda value: None,
                 "utf-8": lambda value: value.decode("utf-8"),
+                "ascii-text": lambda value: value.decode("ascii") if value and all(32 <= b <= 126 for b in value) else None,
                 "ascii-digits": lambda value: value.decode("ascii") if value and all(48 <= b <= 57 for b in value) else None,
             }
             if fmt not in decoders:
@@ -491,7 +514,11 @@ class ASN1Decoder:
         # Try each type
         for tname in type_names:
             try:
-                decoded = spec.decode(tname, data)
+                decoded = self._decode_complete(spec, tname, data)
+                # ANY can return the original encoded bytes; probing it again
+                # would recurse forever without adding information.
+                if isinstance(decoded, (bytes, bytearray)) and decoded == data:
+                    continue
                 return tname, decoded
             except Exception as e:
                 last_exc = e
@@ -518,17 +545,10 @@ class ASN1Decoder:
 
             # Probe only designated nested payloads, never arbitrary identity bytes.
             if asn_try_nested and spec is not None and (nested_types or self.is_cc_context(fields[-1])):
-                tname = None
-                decoded = None
-
-                # Prefer CC-related types when the context hints at call content
-                if self.is_cc_context(context_lower):
-                    cc_types = self._cc_type_candidates(spec, nested_types=nested_types)
-                    tname, decoded = self.try_asn1_decode_bytes(spec, b, types_to_try=cc_types)
-
-                # Fallback to the general search if CC-specific attempt failed
-                if tname is None:
-                    tname, decoded = self.try_asn1_decode_bytes(spec, b, types_to_try=nested_types)
+                # An explicit list limits probing. CC defaults must never fall
+                # back to every unrelated IRI/identity type in the schema.
+                candidates = nested_types or self._cc_type_candidates(spec)
+                tname, decoded = self.try_asn1_decode_bytes(spec, b, types_to_try=candidates)
 
                 if tname:
                     return {"_decoded_as": tname, "value": self.make_json_safe(decoded, spec=spec, asn_try_nested=asn_try_nested, nested_types=nested_types, context_path=context_path)}
@@ -576,6 +596,25 @@ class ASN1Decoder:
         spec = asn1tools.compile_files(files, encoding)
         return spec
 
+    @staticmethod
+    def _has_unknown_choice(value):
+        if isinstance(value, tuple) and len(value) == 2 and value == (None, None):
+            return True
+        if isinstance(value, dict):
+            return any(ASN1Decoder._has_unknown_choice(v) for v in value.values())
+        if isinstance(value, (list, tuple)):
+            return any(ASN1Decoder._has_unknown_choice(v) for v in value)
+        return False
+
+    @staticmethod
+    def _decode_complete(spec, root, data):
+        decoded, consumed = spec.decode_with_length(root, data)
+        if consumed != len(data) or consumed == 0:
+            raise ValueError(f"{root} consumed {consumed} of {len(data)} bytes; expected one complete PDU")
+        if ASN1Decoder._has_unknown_choice(decoded):
+            raise ValueError(f"{root} contains an unsupported ASN.1 CHOICE alternative")
+        return decoded
+
     def try_decode_file(self, spec, candidate_roots, data):
         """
         Try each root type until one succeeds. Returns (root_used, decoded) or (None, exception).
@@ -583,7 +622,7 @@ class ASN1Decoder:
         last_exc = None
         for root in candidate_roots:
             try:
-                decoded = spec.decode(root, data)
+                decoded = self._decode_complete(spec, root, data)
                 return root, decoded
             except Exception as e:
                 last_exc = e
@@ -591,7 +630,9 @@ class ASN1Decoder:
 
     # Process a single file
     # Returns (status, result)
-    def process_bytes(self, data, roots='', encoding='der', asn_try_nested=True, nested_types=None) -> Tuple[bool, Any]:
+    def process_bytes(self, data, roots='', encoding=None, asn_try_nested=True, nested_types=None) -> Tuple[bool, Any]:
+        """Decode one complete PDU; concatenated PDUs require caller framing."""
+        spec = self._spec_for_encoding(encoding)
         candidate_roots = [r.strip() for r in roots.split(',') if r.strip()]
         if not candidate_roots:
             candidate_roots = ['IRIsContent', 'IRIRecord', 'IRI-Begin', 'IRI-Continue', 'IRI-End', 'IRI', 'PS-PDU']
@@ -600,10 +641,10 @@ class ASN1Decoder:
         if nested_types:
             nested_types_list = [t.strip() for t in nested_types.split(',') if t.strip()]
 
-        root_used, result = self.try_decode_file(self.spec, candidate_roots, data)
+        root_used, result = self.try_decode_file(spec, candidate_roots, data)
         
         if root_used:
-            json_safe = self.make_json_safe(result, spec=self.spec, asn_try_nested=asn_try_nested, nested_types=nested_types_list)
+            json_safe = self.make_json_safe(result, spec=spec, asn_try_nested=asn_try_nested, nested_types=nested_types_list)
             return True, {
                 "decoded_with_root": root_used,
                 "content": json_safe
@@ -617,12 +658,12 @@ class ASN1Decoder:
             
             return False, reason
         
-    def process(self, input_file, roots='', encoding='der', asn_try_nested=True, nested_types=None) -> Tuple[bool, Any]:
+    def process(self, input_file, roots='', encoding=None, asn_try_nested=True, nested_types=None) -> Tuple[bool, Any]:
         with open(input_file, 'rb') as f:
             data = f.read()
         return self.process_bytes(data, roots=roots, encoding=encoding, asn_try_nested=asn_try_nested, nested_types=nested_types)
 
-    def process_dir(self, input_dir, output_dir, roots='', encoding='der', save_raw_on_fail=True, asn_try_nested=True, nested_types=None):
+    def process_dir(self, input_dir, output_dir, roots='', encoding=None, save_raw_on_fail=True, asn_try_nested=True, nested_types=None):
         os.makedirs(output_dir, exist_ok=True)
 
         candidate_roots = [r.strip() for r in roots.split(',') if r.strip()]
@@ -631,11 +672,6 @@ class ASN1Decoder:
 
         print(f"[+] Candidate root types: {candidate_roots}")
         print(f"[+] Nested ASN.1 probing of bytes is {'ENABLED' if asn_try_nested else 'DISABLED'}")
-
-        # If user provided nested_types, respect them (split comma)
-        nested_types_list = None
-        if nested_types:
-            nested_types_list = [t.strip() for t in nested_types.split(',') if t.strip()]
 
         for entry in sorted(os.listdir(input_dir)):
             fullpath = os.path.join(input_dir, entry)
@@ -646,17 +682,14 @@ class ASN1Decoder:
                 data = f.read()
 
             print(f"[ ] Decoding: {entry} ({len(data)} bytes)")
-            root_used, result = self.try_decode_file(self.spec, candidate_roots, data)
+            success, result = self.process_bytes(data, roots=roots, encoding=encoding,
+                                                 asn_try_nested=asn_try_nested, nested_types=nested_types)
 
             base_name = os.path.splitext(entry)[0]
-            if root_used:
-                json_safe = self.make_json_safe(result, spec=self.spec, asn_try_nested=asn_try_nested, nested_types=nested_types_list)
+            if success:
                 out_json_path = os.path.join(output_dir, base_name + ".json")
                 with open(out_json_path, 'wb') as outf:
-                    outf.write(orjson.dumps({
-                        "decoded_with_root": root_used,
-                        "content": json_safe
-                    }, option=orjson.OPT_INDENT_2 | orjson.OPT_SERIALIZE_DATACLASS | orjson.OPT_SERIALIZE_NUMPY))
+                    outf.write(orjson.dumps(result, option=orjson.OPT_INDENT_2 | orjson.OPT_SERIALIZE_DATACLASS | orjson.OPT_SERIALIZE_NUMPY))
 
             else:
                 err_path = os.path.join(output_dir, base_name + ".error.txt")
@@ -689,6 +722,8 @@ def main():
     parser.add_argument("--no-nested-asn", dest="asn_try_nested", action="store_false", help="Don't attempt nested ASN.1 decoding of bytes")
     parser.add_argument("--nested-types", default="", help="If provided, comma-separated type names to try when probing bytes (limits probing scope)")
     parser.add_argument("--field-formats", help="JSON file mapping exact field paths to byte formats")
+    parser.add_argument("--no-builtin-formats", dest="use_builtin_formats", action="store_false",
+                        help="Disable ETSI field-format defaults; explicit --field-formats still apply")
     args = parser.parse_args()
 
     field_formats = None
@@ -697,7 +732,8 @@ def main():
             field_formats = json.load(source)
         if not isinstance(field_formats, dict):
             parser.error("--field-formats must contain a JSON object")
-    decoder = ASN1Decoder(args.asn, field_formats=field_formats)
+    decoder = ASN1Decoder(args.asn, field_formats=field_formats, encoding=args.encoding,
+                          use_builtin_formats=args.use_builtin_formats)
 
     decoder.process_dir(args.input, args.output, args.roots, encoding=args.encoding,
                 save_raw_on_fail=args.save_raw, asn_try_nested=args.asn_try_nested, nested_types=args.nested_types)

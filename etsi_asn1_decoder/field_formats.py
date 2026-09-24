@@ -1,7 +1,8 @@
 """Built-in ETSI field/format mappings, independent of enclosing record names.
 
 Source: ETSI TS 101 671 V3.14.1, annex D, PartyInformation,
-CallingPartyNumber and CalledPartyNumber (pp. 89-90 and 112-113).
+CallingPartyNumber, CalledPartyNumber, LawfulInterceptionIdentifier and
+CommunicationIdentifier (pp. 88-90, 97 and 111-115).
 https://www.etsi.org/deliver/etsi_ts/101600_101699/101671/03.14.01_60/ts_101671v031401p.pdf
 
 Match complete, case-sensitive path components, never byte patterns or leaf
@@ -13,6 +14,10 @@ import re
 
 
 ETSI_FIELD_FORMATS = {
+    # These exact ETSI field names also occur in standalone decoded roots.
+    # LIID ASCII is recommended, not mandatory; binary profiles retain hex.
+    ("lawfulInterceptionIdentifier",): "ascii-text",
+    ("communication-Identity-Number",): "ascii-digits",
     ("partyIdentity", "imsi"): "imsi-tbcd",
     ("partyIdentity", "imei"): "imei-tbcd",
     ("partyIdentity", "msISDN"): "map-address",
@@ -29,4 +34,8 @@ ETSI_FIELD_FORMATS = {
 def builtin_field_format(path):
     # SEQUENCE OF adds indices to the JSON traversal path, not to field names.
     fields = tuple(re.sub(r"(?:\[\d+\])+$", "", part) for part in path.split("."))
-    return ETSI_FIELD_FORMATS.get(fields[-2:])
+    for size in (2, 1):
+        fmt = ETSI_FIELD_FORMATS.get(fields[-size:])
+        if fmt is not None:
+            return fmt
+    return None

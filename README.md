@@ -1,6 +1,36 @@
 # ETSI ASN1 Decoder
 
-Smart ASN.1 DER Decoder for ETSI Specs
+ASN.1 BER/DER decoder with explicit ETSI field formats and SMS TPDU support.
+
+## Decode contract
+
+```python
+from etsi_asn1_decoder.decoder import ASN1Decoder
+
+decoder = ASN1Decoder("schemas", encoding="ber")
+success, result = decoder.process("record.ber", roots="IRIContent,PS-PDU")
+```
+
+Choose the codec at construction, or pass `encoding="ber"` / `"der"` to
+`process_bytes`, `process`, or `process_dir`. Per-call codec selection uses a
+cached compiled schema and does not change the constructor's default. Omitting
+the codec preserves the compiler's default (DER for the base class, or a
+subclass's override). The CLI's `--encoding` option selects the actual compiler.
+
+Each base-class input is **one complete PDU**. A root candidate must consume all
+input bytes; trailing data, concatenated PDUs, truncation, and unsupported CHOICE
+alternatives cannot produce a successful partial result. For a multi-PDU stream,
+frame its records first and call `process_bytes` on each frame. `SEQUENCE OF`
+records inside a single PDU are decoded together. Nested decoding also requires
+full byte consumption and uses only the explicit `nested_types` or known CC type
+candidates; failed CC probes do not search unrelated IRI types.
+
+Success means the supplied schema decoded the complete PDU. It does not mean
+every opaque OCTET STRING has a known protocol interpretation, nor does it prove
+the supplied schema matches the sender's protocol revision. Unknown extensions
+in extensible ASN.1 sequences may be skipped by asn1tools: retain source bytes
+when exact wire preservation is required. Keep unsupported byte fields as hex
+and supply a field profile where the encoding is known.
 
 ## Field-specific byte formats
 
@@ -16,6 +46,8 @@ The initial registry follows **ETSI TS 101 671 V3.14.1, annex D**, covering:
 
 | Exact parent/field or CHOICE path | Built-in format |
 | --- | --- |
+| `lawfulInterceptionIdentifier` | `ascii-text` |
+| `communication-Identity-Number` | `ascii-digits` |
 | `partyIdentity.imsi` | `imsi-tbcd` |
 | `partyIdentity.imei` | `imei-tbcd` |
 | `partyIdentity.msISDN` | `map-address` |
@@ -30,6 +62,20 @@ any enclosing record. List indices do not affect built-in matching. A bare
 `imsi`, an unrelated `other.imsi`, or an unsupported `dSS1-Format` remains hex.
 This registry implements known definitions; it does not infer semantics from
 arbitrary ASN.1 files. The initial registry is not exhaustive across ETSI profiles.
+
+LIID and CIN use their exact, case-sensitive ETSI field names, including in
+standalone roots, CHOICE alternatives, and lists. ASCII LIIDs (numeric or textual,
+such as `TEST`) and decimal CINs retain leading zeroes. The LIID default preserves
+all printable ASCII, including spaces and punctuation; it does not trim, sanitize,
+apply application routing rules, or enforce a recommended alphabet. Empty,
+non-ASCII, and control-containing octets remain hex. CIN defaults to ASCII digits,
+as specified in TS 101 671 V3.14.1; earlier or vendor free-format CIN profiles can
+override it with `ascii-text`, `utf-8`, `uint-be`, or `hex` as appropriate.
+
+These are field-name defaults, not ASN.1 type inference. For another schema that
+reuses these names with different semantics, set `use_builtin_formats=False`
+(`--no-builtin-formats` in the CLI) and provide explicit field mappings. Overrides
+still apply with built-ins disabled. Dedicated SMS decoding is a separate feature.
 
 Reference: [ETSI TS 101 671, annex D, PartyInformation and party-number choices](https://www.etsi.org/deliver/etsi_ts/101600_101699/101671/03.14.01_60/ts_101671v031401p.pdf).
 
@@ -64,6 +110,7 @@ Supported formats:
 | `map-address` | MAP AddressString, one TON/NPI octet then decimal TBCD |
 | `isup-called`, `isup-calling` | Q.763 parameter contents, two header octets then decimal digits; excludes parameter tag/length |
 | `ascii-digits`, `utf-8` | Explicit text encoding |
+| `ascii-text` | Nonempty ASCII bytes in `0x20` through `0x7e`, preserved exactly; no trimming or replacement |
 | `ipv4`, `ipv6`, `uuid`, `uint-be` | Explicit binary representation (`uint-be`: unsigned, 1–8 octets) |
 | `hex` | Preserve original bytes |
 
@@ -173,7 +220,42 @@ python -m unittest discover -s tests -v
 
 The tests cover wire vectors, all six TPDU types, character encodings, UDH
 alignment, multipart conflicts/missing segments, malformed inputs, and the
-ASN.1-to-JSON integration.
+ASN.1-to-JSON integration. Identifier tests use synthetic BER/DER records,
+all 256 single-octet values, binary and text profiles, nested records and CHOICEs.
+Shared API tests cover codec selection, complete PDU consumption, directory/file
+decoding, CLI options and constrained nested probing. CI tests the installed wheel
+on Linux and Windows with Python 3.10, 3.12 and 3.14.
+
+## Independent releases and upgrades
+
+The library has its own version, tests, and release history in `CHANGELOG.md`.
+Version 0.2.0 adds strict PDU consumption and corrects byte-field and codec handling;
+review the migration notes before updating a consumer.
+
+Build and validate a release independently of any application:
+
+```console
+python -m pip install build
+python -m build
+python -m pip install --force-reinstall dist/etsi_asn1_decoder-0.2.0-py3-none-any.whl
+python -m unittest discover -s tests -v
+```
+
+Run the installed-wheel tests from outside the source checkout as CI does, so
+imports cannot silently pick up source files. After review, commit and publish
+the release through your normal repository/package process. Consumers should pin
+the published version, an immutable Git commit, or the validated wheel. A Git URL
+without `@<commit>` follows a moving branch and is not a version pin. Upgrade and
+restart the consuming Python process after installing; an already imported module
+does not change in a running service. CI validates builds without publishing them.
+
+When migrating from releases with generic printable-byte guessing, review opaque
+fields as well as identifiers. For example, `ePSCorrelationNumber` has no built-in
+text conversion: even printable octets remain `hex:...`. If your sender's profile
+explicitly defines ASCII here, opt in with an exact override such as
+`{"iRI-Report-record.ePSCorrelationNumber": "ascii-text"}` (supply each actual
+CHOICE path you use). Do not treat arbitrary correlation bytes as universally
+textual. Compare consumer keys and saved output expectations before deployment.
 
 Protocol references: [3GPP TS 23.040](https://www.etsi.org/deliver/etsi_ts/123000_123099/123040/11.05.00_60/ts_123040v110500p.pdf)
 and [3GPP TS 23.038](https://www.etsi.org/deliver/etsi_ts/123000_123099/123038/16.00.00_60/ts_123038v160000p.pdf).

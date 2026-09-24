@@ -2,8 +2,9 @@ from setuptools import setup
 
 setup(
     name='etsi-asn1-decoder',
-    version='0.1.0',
-    description='Smart ASN.1 DER Decoder for ETSI Specs',
+    version='0.2.0',
+    description='ASN.1 BER/DER Decoder for ETSI Specs',
+    python_requires='>=3.10',
     author='Samuel Adeshina',
    packages=['etsi_asn1_decoder'],
    install_requires=[
